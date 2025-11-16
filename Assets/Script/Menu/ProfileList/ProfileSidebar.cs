@@ -6,9 +6,11 @@ using Cysharp.Threading.Tasks;
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
+using YARG.Assets.Script.Helpers;
 using YARG.Core;
 using YARG.Core.Game;
-using YARG.Helpers;
+using YARG.Helpers.Extensions;
+using YARG.Localization;
 using YARG.Menu.Data;
 using YARG.Menu.Persistent;
 using YARG.Menu.ProfileInfo;
@@ -27,9 +29,17 @@ namespace YARG.Menu.ProfileList
         private static readonly GameMode[] _gameModes =
         {
             GameMode.FiveFretGuitar,
+            GameMode.EliteDrums,
             GameMode.FourLaneDrums,
             GameMode.FiveLaneDrums,
-            GameMode.Vocals
+            GameMode.Vocals,
+            GameMode.ProKeys
+        };
+
+        private static readonly StarPowerActivationType[] _starPowerActivationTypes =
+        {
+            StarPowerActivationType.RightmostNote,
+            StarPowerActivationType.AllNotes,
         };
 
         [SerializeField]
@@ -45,6 +55,8 @@ namespace YARG.Menu.ProfileList
 
         [Space]
         [SerializeField]
+        private GameObject _sidebarContent;
+        [SerializeField]
         private TMP_Dropdown _gameModeDropdown;
         [SerializeField]
         private TMP_InputField _noteSpeedField;
@@ -55,6 +67,18 @@ namespace YARG.Menu.ProfileList
         [SerializeField]
         private Toggle _leftyFlipToggle;
         [SerializeField]
+        private Toggle _rangeDisabledToggle;
+        [SerializeField]
+        private Toggle _useCymbalModelsToggle;
+        [SerializeField]
+        private Toggle _splitProTomsAndCymbals;
+        [SerializeField]
+        private Toggle _swapSnareAndHiHat;
+        [SerializeField]
+        private Toggle _swapCrashAndRide;
+        [SerializeField]
+        private TMP_Dropdown _starPowerActivationTypeDropdown;
+        [SerializeField]
         private TMP_Dropdown _engineDropdown;
         [SerializeField]
         private TMP_Dropdown _themeDropdown;
@@ -62,6 +86,10 @@ namespace YARG.Menu.ProfileList
         private TMP_Dropdown _colorProfileDropdown;
         [SerializeField]
         private TMP_Dropdown _cameraPresetDropdown;
+        [SerializeField]
+        private TMP_Dropdown _highwayPresetDropdown;
+        [SerializeField]
+        private TMP_Dropdown _rockMeterPresetDropdown;
 
         [Space]
         [SerializeField]
@@ -83,11 +111,14 @@ namespace YARG.Menu.ProfileList
         private YargProfile _profile;
 
         private readonly List<GameMode> _gameModesByIndex = new();
+        private readonly List<StarPowerActivationType> _starPowerActivationTypesByIndex = new();
 
         private List<Guid> _enginePresetsByIndex;
         private List<Guid> _colorProfilesByIndex;
         private List<Guid> _cameraPresetsByIndex;
         private List<Guid> _themesByIndex;
+        private List<Guid> _highwayPresetsByIndex;
+        private List<Guid> _rockmeterPresetsByIndex;
 
         private void Awake()
         {
@@ -119,6 +150,20 @@ namespace YARG.Menu.ProfileList
             _cameraPresetsByIndex =
                 CustomContentManager.CameraSettings.AddOptionsToDropdown(_cameraPresetDropdown)
                     .Select(i => i.Id).ToList();
+            _highwayPresetsByIndex =
+                CustomContentManager.HighwayPresets.AddOptionsToDropdown(_highwayPresetDropdown)
+                    .Select(i => i.Id).ToList();
+            _rockmeterPresetsByIndex =
+                CustomContentManager.RockMeterPresets.AddOptionsToDropdown(_rockMeterPresetDropdown)
+                    .Select(i => i.Id).ToList();
+
+            // Set drum star power activation type
+            _starPowerActivationTypeDropdown.options.Clear();
+            foreach (var starPowerActivationType in _starPowerActivationTypes)
+            {
+                _starPowerActivationTypesByIndex.Add(starPowerActivationType);
+                _starPowerActivationTypeDropdown.options.Add(new(starPowerActivationType.ToLocalizedName()));
+            }
         }
 
         public void UpdateSidebar(YargProfile profile, ProfileView profileView)
@@ -128,7 +173,7 @@ namespace YARG.Menu.ProfileList
 
             if (!PlayerContainer.IsProfileTaken(_profile))
             {
-                _contents.SetActive(false);
+                HideContents();
                 return;
             }
 
@@ -137,10 +182,17 @@ namespace YARG.Menu.ProfileList
             // Display the profile's options
             _profileName.text = _profile.Name;
             _gameModeDropdown.value = _gameModesByIndex.IndexOf(profile.GameMode);
+            _starPowerActivationTypeDropdown.value = _starPowerActivationTypesByIndex
+                .IndexOf(profile.StarPowerActivationType);
             _noteSpeedField.text = profile.NoteSpeed.ToString(NUMBER_FORMAT, CultureInfo.CurrentCulture);
             _highwayLengthField.text = profile.HighwayLength.ToString(NUMBER_FORMAT, CultureInfo.CurrentCulture);
             _inputCalibrationField.text = _profile.InputCalibrationMilliseconds.ToString();
             _leftyFlipToggle.isOn = profile.LeftyFlip;
+            _rangeDisabledToggle.isOn = profile.RangeEnabled;
+            _useCymbalModelsToggle.isOn = profile.UseCymbalModels;
+            _splitProTomsAndCymbals.isOn = profile.SplitProTomsAndCymbals;
+            _swapSnareAndHiHat.isOn = profile.SwapSnareAndHiHat;
+            _swapCrashAndRide.isOn = profile.SwapCrashAndRide;
 
             // Update preset dropdowns
             _engineDropdown.SetValueWithoutNotify(
@@ -151,6 +203,12 @@ namespace YARG.Menu.ProfileList
                 _colorProfilesByIndex.IndexOf(profile.ColorProfile));
             _cameraPresetDropdown.SetValueWithoutNotify(
                 _cameraPresetsByIndex.IndexOf(profile.CameraPreset));
+            _highwayPresetDropdown.SetValueWithoutNotify(
+                _highwayPresetsByIndex.IndexOf(profile.HighwayPreset));
+            _starPowerActivationTypeDropdown.SetValueWithoutNotify(
+                _starPowerActivationTypesByIndex.IndexOf(profile.StarPowerActivationType));
+            _rockMeterPresetDropdown.SetValueWithoutNotify(
+                _rockmeterPresetsByIndex.IndexOf(profile.RockMeterPreset));
 
             // Show the proper name container (hide the editing version)
             _nameContainer.SetActive(true);
@@ -164,6 +222,45 @@ namespace YARG.Menu.ProfileList
             foreach (var button in _profileActionButtons)
             {
                 button.interactable = interactable;
+            }
+
+            EnableSettingsForGameMode();
+        }
+
+        private void EnableSettingsForGameMode()
+        {
+            var possibleSettings = _profile.GameMode.PossibleProfileSettings(
+                new()
+                {
+                    { ProfileSettingStrings.SPLIT_TOM_AND_CYMBAL_LANES_IN_PRO_DRUMS, _profile.SplitProTomsAndCymbals }
+                });
+
+            for (var i = 0; i < _sidebarContent.transform.childCount; i++)
+            {
+                // Disable if the child's gameObject.name is not found in possibleSettings
+                var child = _sidebarContent.transform.GetChild(i);
+
+                (string setting, string? overrideText)? settingInfo = null;
+
+                foreach (var possibleSetting in possibleSettings)
+                {
+                    if (possibleSetting.setting == child.gameObject.name)
+                    {
+                        settingInfo = possibleSetting;
+                        break;
+                    }
+                }
+
+                if (settingInfo is null)
+                {
+                    child.gameObject.SetActive(false);
+                } else {
+                    child.gameObject.SetActive(true);
+                    if (settingInfo.Value.overrideText is not null)
+                    {
+                        child.gameObject.transform.Find("Option Name").GetComponent<TextMeshProUGUI>().text = settingInfo.Value.overrideText;
+                    }
+                }
             }
         }
 
@@ -190,14 +287,17 @@ namespace YARG.Menu.ProfileList
 
                 // Update the UI
                 _profileName.text = _profile.Name;
-                _profileView.Init(_profileListMenu, _profile, this);
+                _profileView.UpdateDisplay(_profile);
             }
         }
 
         public void EditProfile()
         {
             // Only allow profile editing if it's taken
-            if (!PlayerContainer.IsProfileTaken(_profile)) return;
+            if (!PlayerContainer.IsProfileTaken(_profile))
+            {
+                return;
+            }
 
             var menu = MenuManager.Instance.PushMenu(MenuManager.Menu.ProfileInfo, false);
 
@@ -218,6 +318,14 @@ namespace YARG.Menu.ProfileList
         public void ChangeGameMode()
         {
             _profile.GameMode = _gameModesByIndex[_gameModeDropdown.value];
+
+            // Set the player's instrument to the foremost of their new game mode's possible instruments. This prevents scenarios like
+            // a brand new Keys profile defaulting to 5L Lead Guitar instead of Pro Keys
+            _profile.CurrentInstrument = _profile.GameMode.PossibleInstruments()[0];
+
+            _profileView.UpdateDisplay(_profile);
+            // Update sidebar when game mode changes so the correct settings are displayed
+            UpdateSidebar(_profile, _profileView);
         }
 
         public void ChangeNoteSpeed()
@@ -258,9 +366,63 @@ namespace YARG.Menu.ProfileList
             _profile.LeftyFlip = _leftyFlipToggle.isOn;
         }
 
+        public void ChangeRangeDisabled()
+        {
+            _profile.RangeEnabled = _rangeDisabledToggle.isOn;
+        }
+
+        public void ChangeUseCymbalModels()
+        {
+            _profile.UseCymbalModels = _useCymbalModelsToggle.isOn;
+        }
+
+        public void ChangeSplitProTomsAndCymbals()
+        {
+            _profile.SplitProTomsAndCymbals = _splitProTomsAndCymbals.isOn;
+
+            switch (_profile.GameMode)
+            {
+                case GameMode.FourLaneDrums:
+                    _sidebarContent.transform.Find(ProfileSettingStrings.SWAP_SNARE_AND_HI_HAT).gameObject.SetActive(_profile.SplitProTomsAndCymbals);
+                    _sidebarContent.transform.Find(ProfileSettingStrings.SWAP_CRASH_AND_RIDE).gameObject.SetActive(_profile.SplitProTomsAndCymbals);
+                    if (_profile.SplitProTomsAndCymbals)
+                    {
+                        _sidebarContent.transform
+                            .Find(ProfileSettingStrings.SWAP_SNARE_AND_HI_HAT)
+                            .Find("Option Name")
+                            .GetComponent<TextMeshProUGUI>()
+                            .text = "SWAP SNARE AND HI-HAT LANES";
+                    }
+                    break;
+                case GameMode.EliteDrums:
+                    _sidebarContent.transform.Find(ProfileSettingStrings.SWAP_CRASH_AND_RIDE).gameObject.SetActive(_profile.SplitProTomsAndCymbals);
+                    _sidebarContent.transform
+                            .Find(ProfileSettingStrings.SWAP_SNARE_AND_HI_HAT)
+                            .Find("Option Name")
+                            .GetComponent<TextMeshProUGUI>()
+                            .text = _profile.SplitProTomsAndCymbals ? "SWAP SNARE AND HI-HAT LANES" : "SWAP SNARE AND HI-HAT LANES IN 5-LANE";
+                    break;
+            }
+        }
+
+        public void ChangeSwapSnareAndHiHat()
+        {
+            _profile.SwapSnareAndHiHat = _swapSnareAndHiHat.isOn;
+        }
+
+        public void ChangeSwapCrashAndRide()
+        {
+            _profile.SwapCrashAndRide = _swapCrashAndRide.isOn;
+        }
+
         public void ChangeEngine()
         {
             _profile.EnginePreset = _enginePresetsByIndex[_engineDropdown.value];
+        }
+
+        public void ChangeStarPowerActivationType()
+        {
+            _profile.StarPowerActivationType = _starPowerActivationTypesByIndex[_starPowerActivationTypeDropdown.value];
         }
 
         public void ChangeTheme()
@@ -304,10 +466,10 @@ namespace YARG.Menu.ProfileList
 
             // Add buttons
 
-            dialog.AddDialogButton("Cancel", MenuData.Colors.CancelButton,
+            dialog.AddDialogButton("Menu.Common.Cancel", MenuData.Colors.CancelButton,
                 () => DialogManager.Instance.ClearDialog());
 
-            dialog.AddDialogButton("Apply", MenuData.Colors.ConfirmButton, () =>
+            dialog.AddDialogButton("Menu.Common.Apply", MenuData.Colors.ConfirmButton, () =>
             {
                 _profile.CameraPreset = cameraPreset?.Id ?? CameraPreset.Default.Id;
                 _profile.ColorProfile = colorProfile?.Id ?? ColorProfile.Default.Id;
@@ -326,6 +488,16 @@ namespace YARG.Menu.ProfileList
         public void ChangeCameraPreset()
         {
             _profile.CameraPreset = _cameraPresetsByIndex[_cameraPresetDropdown.value];
+        }
+
+        public void ChangeHighwayPreset()
+        {
+            _profile.HighwayPreset = _highwayPresetsByIndex[_highwayPresetDropdown.value];
+        }
+
+        public void ChangeRockMeterPreset()
+        {
+            _profile.RockMeterPreset = _rockmeterPresetsByIndex[_rockMeterPresetDropdown.value];
         }
     }
 }

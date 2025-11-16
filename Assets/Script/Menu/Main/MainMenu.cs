@@ -1,7 +1,8 @@
-﻿using TMPro;
+using TMPro;
 using UnityEngine;
 using YARG.Core.Input;
 using YARG.Helpers;
+using YARG.Localization;
 using YARG.Menu.MusicLibrary;
 using YARG.Menu.Settings;
 using YARG.Menu.Navigation;
@@ -19,15 +20,14 @@ namespace YARG.Menu.Main
 
         private void Start()
         {
-            _versionText.text = GlobalVariables.CURRENT_VERSION;
+            _versionText.text = GlobalVariables.Instance.CurrentVersion;
 
             // Show the anti-piracy dialog if it hasn't been shown already
             // Also only show it once per game launch
             if (!_antiPiracyDialogShown && SettingsManager.Settings.ShowAntiPiracyDialog)
             {
                 DialogManager.Instance.ShowOneTimeMessage(
-                    LocaleHelper.LocalizeString("Dialogs.AntiPiracy.Title"),
-                    LocaleHelper.LocalizeString("Dialogs.AntiPiracy"),
+                    "Menu.Dialog.AntiPiracy",
                     () =>
                     {
                         SettingsManager.Settings.ShowAntiPiracyDialog = false;
@@ -46,19 +46,18 @@ namespace YARG.Menu.Main
                 NavigationScheme.Entry.NavigateSelect,
                 NavigationScheme.Entry.NavigateUp,
                 NavigationScheme.Entry.NavigateDown,
-                new NavigationScheme.Entry(MenuAction.Select, "Go To Currently Playing", CurrentlyPlaying),
+                new NavigationScheme.Entry(MenuAction.Select, "Menu.Main.GoToCurrentlyPlaying", CurrentlyPlaying),
             }, true));
         }
 
         private void OnDisable()
         {
-            Navigator.Instance.PopScheme();
+            Navigator.Instance?.PopScheme();
         }
 
         public void CurrentlyPlaying()
         {
             MusicLibraryMenu.CurrentlyPlaying = MusicPlayer.NowPlaying;
-
             QuickPlay();
         }
 

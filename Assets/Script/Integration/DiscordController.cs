@@ -1,17 +1,25 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Configuration;
 using System.Net;
 using System.Net.Http;
 using Cysharp.Threading.Tasks;
 using Discord;
 using UnityEngine;
-using UnityEngine.Localization;
 using YARG.Core.Logging;
 using YARG.Core.Song;
-using YARG.Helpers;
+using YARG.Localization;
+using YARG.Settings;
 
 namespace YARG.Integration
 {
+    public enum DiscordRichPresenceMode
+    {
+        Show,
+        Limited,
+        Hide
+    }
+
     public class DiscordController : MonoSingleton<DiscordController>
     {
         private const long APPLICATION_ID = 1091177744416637028;
@@ -29,6 +37,7 @@ namespace YARG.Integration
         private const string LARGE_ICON_KEY = "icon_stable";
 #endif
 
+        private bool _initialized = false;
         private Discord.Discord _discord;
 
         // Keep track of this in case we want to update the value asynchronously
@@ -43,12 +52,33 @@ namespace YARG.Integration
 
         private string _albumUrl;
 
-        private void Start()
+        public void Initialize()
         {
-            // Listen to the changing of states
-            GameStateFetcher.GameStateChange += OnGameStateChange;
+            _initialized = true;
 
-            // Create the Discord instance
+            CreateInstance();
+        }
+
+        public void CreateInstance()
+        {
+            // Skip if loading screen hasn't finished loading localization (localization is required for rich presence to function normally)
+            if (!_initialized)
+            {
+                return;
+            }
+
+            // Don't create instance if Discord rich presence is turned off in settings
+            if (SettingsManager.Settings.DiscordRichPresence.Value == DiscordRichPresenceMode.Hide)
+            {
+                return;
+            }
+
+            // Don't create new instance if instance already exists
+            if (_discord is not null)
+            {
+                return;
+            }
+
             try
             {
                 _discord = new Discord.Discord(APPLICATION_ID, (ulong) CreateFlags.NoRequireDiscord);
@@ -60,6 +90,9 @@ namespace YARG.Integration
                 _discord = null;
                 return;
             }
+
+            // Listen to the changing of states
+            GameStateFetcher.GameStateChange += OnGameStateChange;
 
             // Get the start time of the game (Discord requires it in this format)
             _gameStartTime = DateTimeOffset.Now.ToUnixTimeMilliseconds();
@@ -76,7 +109,8 @@ namespace YARG.Integration
                 return;
             }
 
-            if (state.CurrentScene != SceneIndex.Gameplay)
+            // Set default activity if the user is not playing, or if the Discord rich presence setting is set to limited
+            if (state.CurrentScene != SceneIndex.Gameplay || SettingsManager.Settings.DiscordRichPresence.Value == DiscordRichPresenceMode.Limited)
             {
                 _wasInGameplay = false;
                 _wasPaused = false;
@@ -121,24 +155,16 @@ namespace YARG.Integration
 
             // Localize Discord Rich Presence
 
-            var discordDetails = LocaleHelper.StringReference("Discord.Song.Name");
-            discordDetails.Arguments = new object[]
-            {
-                song.Name, song.Artist
-            };
+            var discordDetails = Localize.KeyFormat("Discord.Song.Name", song.Name, song.Artist);
 
-            LocalizedString discordState;
+            string discordState;
             if (state.Paused)
             {
-                discordState = LocaleHelper.StringReference("Discord.Song.Paused");
+                discordState = Localize.Key("Discord.Song.Paused");
             }
             else
             {
-                discordState = LocaleHelper.StringReference("Discord.Song.Album");
-                discordState.Arguments = new object[]
-                {
-                    song.Album
-                };
+                discordState = Localize.KeyFormat("Discord.Song.Album", song.Album);
             }
 
             // Get activity
@@ -147,10 +173,10 @@ namespace YARG.Integration
                 Assets =
                 {
                     LargeImage = LARGE_ICON_KEY,
-                    LargeText = LocaleHelper.LocalizeString(LARGE_TEXT_KEY)
+                    LargeText = Localize.Key(LARGE_TEXT_KEY)
                 },
-                Details = discordDetails.GetLocalizedString(),
-                State = discordState.GetLocalizedString(),
+                Details = discordDetails,
+                State = discordState,
                 Timestamps =
                 {
                     // If it's paused, don't show the time elapsed
@@ -241,7 +267,7 @@ namespace YARG.Integration
             TryDispose();
         }
 
-        private void TryDispose()
+        public void TryDispose()
         {
             if (_discord == null)
             {
@@ -250,6 +276,8 @@ namespace YARG.Integration
 
             try
             {
+                GameStateFetcher.GameStateChange -= OnGameStateChange;
+
                 _discord.GetActivityManager().ClearActivity(_ => { });
                 _discord.Dispose();
                 _discord = null;
@@ -293,10 +321,10 @@ namespace YARG.Integration
                 {
                     // The image and key are defined in the Discord developer portal
                     LargeImage = LARGE_ICON_KEY,
-                    LargeText = LocaleHelper.LocalizeString(LARGE_TEXT_KEY)
+                    LargeText = Localize.Key(LARGE_TEXT_KEY)
                 },
-                Details = LocaleHelper.LocalizeString("Discord.Default.Details"),
-                State = LocaleHelper.LocalizeString("Discord.Default.State"),
+                Details = Localize.Key("Discord.Default.Details"),
+                State = Localize.Key("Discord.Default.State"),
                 Timestamps =
                 {
                     Start = _gameStartTime

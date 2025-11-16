@@ -38,7 +38,7 @@ namespace YARG.Song
             // TODO: Allow customizing sorting, as well as which metadata is written and in what order
 
             using var output = new StreamWriter(path);
-            foreach (var (category, songs) in SongContainer.GetSortedSongList(SongAttribute.Artist))
+            foreach (var (category, songs) in SongContainer.GetSortedCategory(SortAttribute.Artist))
             {
                 output.WriteLine(category);
                 output.WriteLine("--------------------");
@@ -48,6 +48,7 @@ namespace YARG.Song
                     string name = RichTextUtils.StripRichTextTags(song.Name);
                     output.WriteLine($"{artist} - {name}");
                 }
+                output.WriteLine("");
             }
             output.Flush();
         }
@@ -67,7 +68,7 @@ namespace YARG.Song
                     genre = RichTextUtils.StripRichTextTags(song.Genre),
                     charter = RichTextUtils.StripRichTextTags(song.Charter),
                     year = RichTextUtils.StripRichTextTags(song.UnmodifiedYear),
-                    songLength = song.SongLengthMilliseconds
+                    songLength = (ulong)song.SongLengthMilliseconds
                 });
             }
 

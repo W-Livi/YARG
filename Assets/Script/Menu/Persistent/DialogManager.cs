@@ -1,7 +1,14 @@
 using System;
+using Cysharp.Threading.Tasks;
 using UnityEngine;
+using UnityEngine.InputSystem;
+using YARG.Core;
+using YARG.Core.Game;
+using YARG.Localization;
 using YARG.Menu.Data;
 using YARG.Menu.Dialogs;
+using YARG.Player;
+using YARG.Menu.MusicLibrary;
 
 namespace YARG.Menu.Persistent
 {
@@ -18,11 +25,25 @@ namespace YARG.Menu.Persistent
         [SerializeField]
         private ListDialog _listPrefab;
         [SerializeField]
+        private ListWithSettingsDialog _listWithSettingsPrefab;
+        [SerializeField]
         private RenameDialog _renameDialog;
         [SerializeField]
         private ConfirmDeleteDialog _confirmDeleteDialog;
         [SerializeField]
         private ColorPickerDialog _colorPickerDialog;
+        [SerializeField]
+        private FiveFretBindingDialog _fiveFretBindingDialog;
+        [SerializeField]
+        private FriendlyBindingDialog _friendlyKeysBindingDialog;
+        [SerializeField]
+        private FriendlyBindingDialog _friendlyDrumsBindingDialog;
+        [SerializeField]
+        private FriendlyBindingDialog _friendly5LaneDrumsBindingDialog;
+        [SerializeField]
+        private FriendlyBindingDialog _friendlyMidiDrumsBindingDialog;
+        [SerializeField]
+        private SongPickerListDialog _playAShowDialog;
 
         private Dialog _currentDialog;
 
@@ -48,19 +69,75 @@ namespace YARG.Menu.Persistent
         /// Displays and returns a one time message dialog. If the "dont show again" toggle is checked,
         /// <paramref name="dontShowAgainAction"/> will be invoked.
         /// </summary>
+        /// <remarks>
+        /// The given localization key must have <c>Title</c>, <c>Description</c>, and <c>Confirm</c> children.
+        /// </remarks>
         /// <inheritdoc cref="ShowDialog{MessageDialog}(MessageDialog)"/>
-        public OneTimeMessageDialog ShowOneTimeMessage(string title, string message, Action dontShowAgainAction)
+        public OneTimeMessageDialog ShowOneTimeMessage(string localizationKey, Action dontShowAgainAction)
         {
             var dialog = ShowDialog(_oneTimeMessagePrefab);
 
-            dialog.Title.text = title;
-            dialog.Message.text = message;
+            dialog.Title.text = Localize.Key(localizationKey, "Title");
+            dialog.Message.text = Localize.Key(localizationKey, "Description");
 
             dialog.DontShowAgainAction = dontShowAgainAction;
 
             dialog.ClearButtons();
-            dialog.AddDialogButton("I Understand", MenuData.Colors.ConfirmButton, ClearDialog);
+            dialog.AddDialogButton(
+                Localize.MakeKey(localizationKey, "Confirm"),
+                MenuData.Colors.ConfirmButton,
+                ClearDialog
+            );
 
+            return dialog;
+        }
+
+        public FriendlyBindingDialog ShowFriendlyBindingDialog(YargProfile profile, GameMode gameMode)
+        {
+            YargPlayer player = null;
+            var players = PlayerContainer.Players;
+            foreach (var p in players)
+            {
+                if (p.Profile.Id == profile.Id)
+                {
+                    player = p;
+                    break;
+                }
+            }
+
+            if (player == null)
+            {
+                ShowMessage("Error", "Player not found for this profile. Please report on Discord.");
+                return null;
+            }
+
+            if (player.Bindings.InputDevices.Count != 1)
+            {
+                ShowMessage("Not Supported",
+                    "Quick binding is currently only supported for profiles with exactly one input device.");
+                return null;
+            }
+
+            var device = player.Bindings.InputDevices[0];
+
+            var prefab = gameMode switch
+            {
+                GameMode.ProKeys        => _friendlyKeysBindingDialog,
+                GameMode.FourLaneDrums  => _friendlyDrumsBindingDialog,
+                GameMode.FiveLaneDrums  => _friendly5LaneDrumsBindingDialog,
+                GameMode.EliteDrums     => _friendlyMidiDrumsBindingDialog,
+                _                       => null
+            };
+
+            if (prefab == null)
+            {
+                ShowMessage("Instrument Not Supported", "Quick binding is not yet supported for this instrument.\nYou'll have to do it the old way, sorry.");
+                return null;
+            }
+
+            var dialog = ShowDialog(prefab);
+            dialog.SetParameters((device, player, gameMode));
+            dialog.Initialize();
             return dialog;
         }
 
@@ -71,6 +148,19 @@ namespace YARG.Menu.Persistent
         public ListDialog ShowList(string title)
         {
             var dialog = ShowDialog(_listPrefab);
+
+            dialog.Title.text = title;
+
+            return dialog;
+        }
+
+        /// <summary>
+        /// Displays and returns a list dialog with configurable settings.
+        /// </summary>
+        /// <inheritdoc cref="ShowDialog{ListWithSettingsDialog}(ListWithSettingsDialog)"/>
+        public ListWithSettingsDialog ShowListWithSettings(string title)
+        {
+            var dialog = ShowDialog(_listWithSettingsPrefab);
 
             dialog.Title.text = title;
 
@@ -90,8 +180,11 @@ namespace YARG.Menu.Persistent
             dialog.RenameAction = renameAction;
 
             dialog.ClearButtons();
-            dialog.AddDialogButton("Cancel", MenuData.Colors.CancelButton, ClearDialog);
-            dialog.AddDialogButton("Confirm", MenuData.Colors.ConfirmButton, SubmitAndClearDialog);
+            dialog.AddDialogButton("Menu.Common.Cancel", MenuData.Colors.CancelButton, ClearDialog);
+            dialog.AddDialogButton("Menu.Common.Confirm", MenuData.Colors.ConfirmButton, SubmitAndClearDialog);
+
+            // Make the dialog input field active so no mouse is required
+            dialog.ActivateInputField();
 
             return dialog;
         }
@@ -109,8 +202,8 @@ namespace YARG.Menu.Persistent
             dialog.DeleteAction = deleteAction;
 
             dialog.ClearButtons();
-            dialog.AddDialogButton("Cancel", MenuData.Colors.BrightButton, ClearDialog);
-            dialog.AddDialogButton("Delete", MenuData.Colors.CancelButton, () => _currentDialog.Submit());
+            dialog.AddDialogButton("Menu.Common.Cancel", MenuData.Colors.BrightButton, ClearDialog);
+            dialog.AddDialogButton("Menu.Common.Delete", MenuData.Colors.CancelButton, () => _currentDialog.Submit());
 
             return dialog;
         }
@@ -123,13 +216,21 @@ namespace YARG.Menu.Persistent
         {
             var dialog = ShowDialog(_colorPickerDialog);
 
-            dialog.Title.text = "Color Picker";
+            dialog.Title.text = Localize.Key("Menu.Dialog.ColorPicker.Title");
             dialog.Initialize(initialColor);
             dialog.ColorPickAction = colorPickAction;
 
             dialog.ClearButtons();
-            dialog.AddDialogButton("Cancel", MenuData.Colors.CancelButton, ClearDialog);
-            dialog.AddDialogButton("Apply", MenuData.Colors.ConfirmButton, () => _currentDialog.Submit());
+            dialog.AddDialogButton("Menu.Common.Cancel", MenuData.Colors.CancelButton, ClearDialog);
+            dialog.AddDialogButton("Menu.Common.Apply", MenuData.Colors.ConfirmButton, () => _currentDialog.Submit());
+
+            return dialog;
+        }
+
+        public SongPickerListDialog ShowSongPickerDialog(string title, MusicLibraryMenu menu)
+        {
+            var dialog = ShowDialog(_playAShowDialog);
+            dialog.Initialize(menu);
 
             return dialog;
         }
@@ -150,7 +251,7 @@ namespace YARG.Menu.Persistent
             _currentDialog = dialog;
 
             dialog.ClearButtons();
-            dialog.AddDialogButton("Close", MenuData.Colors.CancelButton, ClearDialog);
+            dialog.AddDialogButton("Menu.Common.Close", MenuData.Colors.CancelButton, ClearDialog);
 
             return dialog;
         }
@@ -179,6 +280,17 @@ namespace YARG.Menu.Persistent
         {
             _currentDialog.Submit();
             ClearDialog();
+        }
+
+        /// <summary>
+        /// Destroys the currently-displayed dialog.
+        /// </summary>
+        public UniTask WaitUntilCurrentClosed()
+        {
+            if (_currentDialog == null)
+                return UniTask.CompletedTask;
+
+            return _currentDialog.WaitUntilClosed();
         }
     }
 }

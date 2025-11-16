@@ -5,6 +5,7 @@ using System.Text.RegularExpressions;
 using UnityEngine;
 using YARG.Core.Logging;
 using YARG.Core.Song;
+using YARG.Localization;
 
 namespace YARG.Helpers
 {
@@ -64,7 +65,7 @@ namespace YARG.Helpers
                 "artist", x => x.Artist
             },
             {
-                "year", x => x.Year
+                "year", x => x.ParsedYear
             },
             {
                 "album", x => x.Album
@@ -80,7 +81,7 @@ namespace YARG.Helpers
                         return string.Empty;
                     }
 
-                    return GlobalVariables.State.SongSpeed.ToString("P0", LocaleHelper.PercentFormat);
+                    return Localize.Percent(GlobalVariables.State.SongSpeed);
                 }
             }
         };
@@ -94,7 +95,7 @@ namespace YARG.Helpers
                 "artist", x => !string.IsNullOrEmpty(x.Artist)
             },
             {
-                "year", x => !string.IsNullOrEmpty(x.Year)
+                "year", x => !string.IsNullOrEmpty(x.ParsedYear)
             },
             {
                 "album", x => !string.IsNullOrEmpty(x.Album)

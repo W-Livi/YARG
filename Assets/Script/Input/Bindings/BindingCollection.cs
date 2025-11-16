@@ -2,8 +2,8 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
-using UnityEngine;
 using UnityEngine.InputSystem;
+using UnityEngine.InputSystem.XInput;
 using YARG.Core;
 using YARG.Core.Extensions;
 using YARG.Input.Serialization;
@@ -136,6 +136,17 @@ namespace YARG.Input
             foreach (var binding in _bindings)
             {
                 if (binding.ContainsControl(control))
+                    return true;
+            }
+
+            return false;
+        }
+
+        public bool ContainsBindingsForDevice(InputDevice device)
+        {
+            foreach (var binding in _bindings)
+            {
+                if (binding.ContainsBindingsForDevice(device))
                     return true;
             }
 

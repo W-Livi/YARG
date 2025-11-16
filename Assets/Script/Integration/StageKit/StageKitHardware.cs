@@ -200,11 +200,21 @@ namespace YARG.Integration.StageKit
         private void Start()
         {
             InputSystem.onDeviceChange += OnDeviceChange;
+
+            // Build a list of all the stage kits connected
+            foreach (var device in InputSystem.devices)
+            {
+                if (device is IStageKitHaptics haptics)
+                {
+                    _stageKits.Add(haptics);
+                }
+            }
         }
 
         protected override void SingletonDestroy()
         {
             InputSystem.onDeviceChange -= OnDeviceChange;
+
             foreach (var kit in _stageKits)
             {
                 kit.ResetHaptics();
@@ -215,30 +225,21 @@ namespace YARG.Integration.StageKit
         {
             if (isEnabled)
             {
-                // Build a list of all the stage kits connected
-                foreach (var device in InputSystem.devices)
-                {
-                    if (device is IStageKitHaptics haptics)
-                    {
-                        _stageKits.Add(haptics);
-                    }
-                }
-
                 // Stage Kits remember its last state which is neat but not needed on startup
                 foreach (var kit in _stageKits)
                 {
                     kit.ResetHaptics();
                 }
 
-                MasterLightingController.OnFogState += OnFogStateEvent;
-                MasterLightingController.OnStrobeEvent += OnStrobeEvent;
                 StageKitInterpreter.OnLedEvent += HandleLedEvent;
+                StageKitInterpreter.OnFogMachineEvent += HandleFogEvent;
+                StageKitInterpreter.OnStrobeSetEvent += HandleStrobeEvent;
             }
             else
             {
-                MasterLightingController.OnFogState -= OnFogStateEvent;
-                MasterLightingController.OnStrobeEvent -= OnStrobeEvent;
                 StageKitInterpreter.OnLedEvent -= HandleLedEvent;
+                StageKitInterpreter.OnFogMachineEvent -= HandleFogEvent;
+                StageKitInterpreter.OnStrobeSetEvent -= HandleStrobeEvent;
             }
         }
 
@@ -253,16 +254,6 @@ namespace YARG.Integration.StageKit
             {
                 if (device is IStageKitHaptics haptics) _stageKits.Remove(haptics);
             }
-        }
-
-        private void OnFogStateEvent(MasterLightingController.FogState value)
-        {
-            EnqueueCommand((int) CommandType.FogMachine, (byte) value);
-        }
-
-        private void OnStrobeEvent(StageKitStrobeSpeed value)
-        {
-            EnqueueCommand((int) CommandType.StrobeSpeed, (byte) value);
         }
 
         //The actual queueing and sending of commands
@@ -375,10 +366,20 @@ namespace YARG.Integration.StageKit
                     things = MasterLightingController.CurrentLightingCue;
                 }
 
-                await UniTask.Delay(TimeSpan.FromSeconds(SEND_DELAY));
+                await UniTask.Delay(TimeSpan.FromSeconds(SEND_DELAY), ignoreTimeScale: true);
             }
 
             _isSendingCommands = false;
+        }
+
+        private void HandleFogEvent(MasterLightingController.FogState value)
+        {
+            EnqueueCommand((int) CommandType.FogMachine, (byte) value);
+        }
+
+        private void HandleStrobeEvent(StageKitStrobeSpeed value)
+        {
+            EnqueueCommand((int) CommandType.StrobeSpeed, (byte) value);
         }
 
         private void HandleLedEvent(StageKitLedColor color, byte led)
@@ -423,9 +424,3 @@ namespace YARG.Integration.StageKit
         }
     }
 }
-/*
-    "To me, clowns aren't funny. In fact, they're kind of scary. I've wondered where this started and I think it goes
-    back to the time I went to the circus, and a clown killed my dad."
-
-    - Jack Handey.
-*/

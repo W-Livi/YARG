@@ -2,10 +2,8 @@
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
-using System.Text.RegularExpressions;
 using Newtonsoft.Json;
 using TMPro;
-using UnityEngine;
 using YARG.Core.Game;
 using YARG.Core.Logging;
 using YARG.Core.Utility;
@@ -22,7 +20,8 @@ namespace YARG.Settings.Customization
             Formatting = Formatting.Indented,
             Converters = new List<JsonConverter>
             {
-                new JsonColorConverter()
+                new JsonColorConverter(),
+                new JsonVector2Converter()
             }
         };
 

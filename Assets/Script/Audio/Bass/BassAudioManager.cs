@@ -21,7 +21,6 @@ namespace YARG.Audio.BASS
         public static StreamHandle? Create(int sourceStream, int[] indices)
         {
             const BassFlags splitFlags = BassFlags.Decode | BassFlags.SplitPosition;
-            const BassFlags tempoFlags = BassFlags.SampleOverrideLowestVolume | BassFlags.Decode | BassFlags.FxFreeSource;
 
             int[]? channelMap = null;
 #nullable disable
@@ -41,18 +40,11 @@ namespace YARG.Audio.BASS
                 YargLogger.LogFormatError("Failed to create split stream: {0}!", Bass.LastError);
                 return null;
             }
-
-            var handle = new StreamHandle(BassFx.TempoCreate(streamSplit, tempoFlags));
-            handle.CompressorFX = BassHelpers.AddCompressorToChannel(handle.Stream);
-            if (handle.CompressorFX == 0)
-            {
-                YargLogger.LogError("Failed to set up compressor for split stream!");
-            }
-            return handle;
+            return new StreamHandle(streamSplit);
         }
 
-        private bool _disposed;
-        public readonly int Stream;
+        private          bool _disposed;
+        public readonly  int  Stream;
 
         public int CompressorFX;
         public int PitchFX;
@@ -102,7 +94,6 @@ namespace YARG.Audio.BASS
         protected override ReadOnlySpan<string> SupportedFormats => FORMATS;
 
         private readonly int _opusHandle = 0;
-        
 
         public BassAudioManager()
         {
@@ -118,6 +109,7 @@ namespace YARG.Audio.BASS
             Bass.UpdatePeriod = 5;
             //Bass.PlaybackBufferLength = BassHelpers.PLAYBACK_BUFFER_LENGTH;
             Bass.DeviceNonStop = true;
+            Bass.AsyncFileBufferLength = 65536;
 
             // This not the same as Bass.UpdatePeriod
             // If not explicitly set by the audio driver or OS, the default will be 10
@@ -143,6 +135,15 @@ namespace YARG.Audio.BASS
             int deviceCount = Bass.DeviceCount;
             YargLogger.LogFormatInfo("Devices found: {0}", deviceCount);
 
+#if UNITY_EDITOR
+            // Free BASS if it's already initialized (happens when stopping play mode in editor)
+            if (Bass.CurrentDevice != -1)
+            {
+                YargLogger.LogInfo("BASS already initialized, cleaning up first");
+                Bass.PluginFree(0);
+                Bass.Free();
+            }
+#endif
             if (!Bass.Init(-1, 44100, DeviceInitFlags.Default | DeviceInitFlags.Latency, IntPtr.Zero))
             {
                 var error = Bass.LastError;
@@ -154,6 +155,8 @@ namespace YARG.Audio.BASS
             }
 
             LoadSfx();
+            LoadDrumSfx(); // TODO: move drum sfx loading/disposal to song start/end respectively IF there are any drum players
+            LoadVox();
 
             var info = Bass.Info;
             PlaybackLatency = info.Latency + Bass.DeviceBufferLength + devPeriod;
@@ -170,31 +173,16 @@ namespace YARG.Audio.BASS
 #nullable enable
         protected override StemMixer? CreateMixer(string name, float speed, double mixerVolume, bool clampStemVolume)
         {
-            const int ASYNCFILEBUFFER_SINGLE = 0xFFFF;
-            YargLogger.LogDebug("Loading song");
+            if (GlobalAudioHandler.LogMixerStatus)
+            {
+                YargLogger.LogDebug("Loading song");
+            }
+
             if (!CreateMixerHandle(out int handle))
             {
                 return null;
             }
-            Bass.AsyncFileBufferLength = ASYNCFILEBUFFER_SINGLE;
-            return new BassStemMixer(name, this, speed, mixerVolume, handle, 0, clampStemVolume);
-        }
-
-        protected override StemMixer? CreateMixer(string name, Stream stream, float speed, double mixerVolume, bool clampStemVolume)
-        {
-            const int ASYNCFILEBUFFER_MULTI = 8 * 0xFFFF;
-            YargLogger.LogDebug("Loading song");
-            if (!CreateMixerHandle(out int handle))
-            {
-                return null;
-            }
-
-            Bass.AsyncFileBufferLength = ASYNCFILEBUFFER_MULTI;
-            if (!CreateSourceStream(stream, out int sourceStream))
-            {
-                return null;
-            }
-            return new BassStemMixer(name, this, speed, mixerVolume, handle, sourceStream, clampStemVolume);
+            return new BassStemMixer(name, this, speed, mixerVolume, handle, clampStemVolume);
         }
 
         protected override MicDevice? GetInputDevice(string name)
@@ -268,27 +256,85 @@ namespace YARG.Audio.BASS
 
             string sfxFolder = Path.Combine(Application.streamingAssetsPath, "sfx");
 
-            foreach (string sfxFile in AudioHelpers.SfxPaths)
+            foreach (var sample in AudioHelpers.SfxSamples)
             {
+                var sfxFile = sample.File;
                 string sfxBase = Path.Combine(sfxFolder, sfxFile);
                 foreach (string format in SupportedFormats)
                 {
                     string sfxPath = sfxBase + format;
                     if (File.Exists(sfxPath))
                     {
-                        var sfxSample = AudioHelpers.GetSfxFromName(sfxFile);
-                        var sfx = BassSampleChannel.Create(sfxSample, sfxPath, 8);
+                        var sfxSample = sample.Kind;
+                        var sfx = BassSampleChannel.Create(sfxSample, sfxPath, 8, sample.CanLoop);
                         if (sfx != null)
                         {
                             SfxSamples[(int) sfxSample] = sfx;
                             YargLogger.LogFormatInfo("Loaded {0}", sfxFile);
                         }
                         break;
-                    }  
+                    }
                 }
             }
 
             YargLogger.LogInfo("Finished loading SFX");
+        }
+
+        private void LoadDrumSfx()
+        {
+            YargLogger.LogInfo("Loading Drum SFX");
+
+            string sfxFolder = Path.Combine(Application.streamingAssetsPath, "drumSfx");
+
+            foreach (var sample in AudioHelpers.DrumSamples)
+            {
+                string sfxBase = Path.Combine(sfxFolder, sample.File);
+                foreach (string format in SupportedFormats)
+                {
+                    string sfxPath = sfxBase + format;
+                    if (File.Exists(sfxPath))
+                    {
+                        var sfxSample = sample.Kind;
+                        var sfx = BassDrumSampleChannel.Create(sfxSample, sfxPath, 8);
+                        if (sfx != null)
+                        {
+                            DrumSfxSamples[(int) sfxSample] = sfx;
+                        }
+                        break;
+                    }
+                }
+            }
+
+            YargLogger.LogInfo("Finished loading Drum SFX");
+        }
+
+        private void LoadVox()
+        {
+            YargLogger.LogInfo("Loading VOX");
+            string voxFolder = Path.Combine(Application.streamingAssetsPath, "vox");
+
+            foreach (var sample in AudioHelpers.VoxSamples)
+            {
+                string voxBase = Path.Combine(voxFolder, sample.File);
+                foreach (string format in SupportedFormats)
+                {
+                    string voxPath = voxBase + format;
+                    if (File.Exists(voxPath))
+                    {
+                        var voxSample = sample.Kind;
+                        var vox = BassVoxSampleChannel.Create(voxSample, voxPath);
+
+                        if (vox != null)
+                        {
+                            VoxSamples[(int) voxSample] = vox;
+                        }
+
+                        break;
+                    }
+                }
+            }
+
+            YargLogger.LogInfo("Finished loading VOX");
         }
 
         protected override void SetMasterVolume(double volume)
@@ -351,11 +397,19 @@ namespace YARG.Audio.BASS
 
         private static bool CreateMixerHandle(out int mixerHandle)
         {
-            mixerHandle = BassMix.CreateMixerStream(44100, 2, BassFlags.Default);
+            // The float flag allows >0dB signals.
+            // Note that the compressor attempts to normalize signals >-2dB, but some mixes will pierce through.
+            mixerHandle = BassMix.CreateMixerStream(44100, 2, BassFlags.Float | BassFlags.Decode);
             if (mixerHandle == 0)
             {
                 YargLogger.LogFormatError("Failed to create mixer: {0}!", Bass.LastError);
                 return false;
+            }
+
+            int compressorFX = BassHelpers.AddCompressorToChannel(mixerHandle);
+            if (compressorFX == 0)
+            {
+                YargLogger.LogError("Failed to set up compressor for mixer stream!");
             }
             return true;
         }
@@ -376,21 +430,37 @@ namespace YARG.Audio.BASS
             return true;
         }
 
-        internal static void SetSpeed(float speed, int streamHandle, int reverbHandle, bool shiftPitch)
+        internal static bool GetSpeed(int streamHandle, out float speed)
+        {
+            if (!Bass.ChannelGetAttribute(streamHandle, ChannelAttribute.Tempo, out float relativeSpeed))
+            {
+                speed = 0;
+                YargLogger.LogFormatError("Failed to get channel speed: {0}", Bass.LastError);
+                return false;
+            }
+
+            // Turn relative speed into percentage speed
+            float percentageSpeed = relativeSpeed + 100;
+            speed = percentageSpeed / 100;
+
+            return true;
+        }
+
+        internal static void SetSpeed(float speed, int streamHandle, bool shiftPitch)
         {
             // Gets relative speed from 100% (so 1.05f = 5% increase)
             float percentageSpeed = speed * 100;
             float relativeSpeed = percentageSpeed - 100;
 
-            if (!Bass.ChannelSetAttribute(streamHandle, ChannelAttribute.Tempo, relativeSpeed) ||
-                !Bass.ChannelSetAttribute(reverbHandle, ChannelAttribute.Tempo, relativeSpeed))
+
+            if (!Bass.ChannelSetAttribute(streamHandle, ChannelAttribute.Tempo, relativeSpeed))
             {
                 YargLogger.LogFormatError("Failed to set channel speed: {0}!", Bass.LastError);
             }
 
             if (GlobalAudioHandler.IsChipmunkSpeedup && shiftPitch)
             {
-                SetChipmunking(speed, streamHandle, reverbHandle);
+                SetChipmunking(speed, streamHandle);
             }
         }
 
@@ -428,21 +498,14 @@ namespace YARG.Audio.BASS
                     SetupPitchBend(pitchParams, reverbHandles);
                 }
             }
-
-            speed = (float) Math.Clamp(speed, 0.05, 50);
-            if (!Mathf.Approximately(speed, 1))
-            {
-                SetSpeed(speed, streamHandles.Stream, reverbHandles.Stream, true);
-            }
             return pitchParams;
         }
 
-        internal static void SetChipmunking(float speed, int streamHandle, int reverbHandle)
+        internal static void SetChipmunking(float speed, int streamHandle)
         {
             double accurateSemitoneShift = 12 * Math.Log(speed, 2);
             float finalSemitoneShift = (float) Math.Clamp(accurateSemitoneShift, -60, 60);
-            if (!Bass.ChannelSetAttribute(streamHandle, ChannelAttribute.Pitch, finalSemitoneShift) ||
-                !Bass.ChannelSetAttribute(reverbHandle, ChannelAttribute.Pitch, finalSemitoneShift))
+            if (!Bass.ChannelSetAttribute(streamHandle, ChannelAttribute.Pitch, finalSemitoneShift))
             {
                 YargLogger.LogFormatError("Failed to set channel pitch: {0}!", Bass.LastError);
             }
@@ -450,12 +513,13 @@ namespace YARG.Audio.BASS
 
         internal static bool SetupPitchBend(in PitchShiftParametersStruct pitchParams, StreamHandle handles)
         {
-            handles.CompressorFX = BassHelpers.FXAddParameters(handles.Stream, EffectType.PitchShift, pitchParams);
-            if (handles.CompressorFX == 0)
+            handles.PitchFX = BassHelpers.FXAddParameters(handles.Stream, EffectType.PitchShift, pitchParams);
+            if (handles.PitchFX == 0)
             {
                 YargLogger.LogError("Failed to set up pitch bend for main stream!");
                 return false;
             }
+
             return true;
         }
 

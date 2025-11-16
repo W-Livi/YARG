@@ -1,16 +1,21 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using JetBrains.Annotations;
 using UnityEngine;
 using UnityEngine.SceneManagement;
+using UnityEngine.UI;
 using YARG.Audio.BASS;
 using YARG.Core;
 using YARG.Core.Logging;
 using YARG.Core.Audio;
 using YARG.Core.Song;
+using YARG.Helpers;
 using YARG.Input;
 using YARG.Integration;
+using YARG.Localization;
+using YARG.Menu.Navigation;
 using YARG.Menu.ScoreScreen;
 using YARG.Player;
 using YARG.Playlists;
@@ -34,51 +39,57 @@ namespace YARG
     [DefaultExecutionOrder(-5000)]
     public class GlobalVariables : MonoSingleton<GlobalVariables>
     {
-        public const string CURRENT_VERSION = "v0.12.3";
-
-        private const string OFFLINE_ARG = "-offline";
-
         public List<YargPlayer> Players { get; private set; }
 
-        public static IReadOnlyList<string> CommandLineArguments { get; private set; }
-        public static bool OfflineMode { get; private set; }
+        public static bool OfflineMode    { get; private set; }
+        public static bool VerboseReplays { get; private set; }
+
+        public static string PersistentDataPathOverride { get; private set; }
+
         public static PersistentState State = PersistentState.Default;
 
         public SceneIndex CurrentScene { get; private set; } = SceneIndex.Persistent;
 
+        public string CurrentVersion { get; private set; } = "v0.13.1";
+
         protected override void SingletonAwake()
         {
-            YargLogger.LogFormatInfo("YARG {0}", CURRENT_VERSION);
+            CurrentVersion = LoadVersion();
+            YargLogger.LogFormatInfo("YARG {0}", CurrentVersion);
 
-            // Get command line args
-            // The first element is always the file name, however check just in case
-            var args = Environment.GetCommandLineArgs();
-            if (args.Length >= 1)
+            // Command line arguments
+
+            if (CommandLineArgs.Offline)
             {
-                CommandLineArguments = args[1..].ToList();
+                OfflineMode = true;
+                YargLogger.LogInfo("Playing in offline mode");
             }
-            else
+
+            if (CommandLineArgs.VerboseReplays)
             {
-                CommandLineArguments = new List<string>();
+                VerboseReplays = true;
+                YargLogger.LogInfo("Verbose replays enabled");
             }
+
+            if (!string.IsNullOrEmpty(CommandLineArgs.DownloadLocation))
+            {
+                PathHelper.SetPathsFromDownloadLocation(CommandLineArgs.DownloadLocation);
+            }
+
+            // TODO: Actually respect the PersistentDataPath arg
 
             // Initialize important classes
+
             ReplayContainer.Init();
             ScoreContainer.Init();
             PlaylistContainer.Initialize();
             CustomContentManager.Initialize();
-
-            // Check for offline mode
-            OfflineMode = CommandLineArguments.Contains(OFFLINE_ARG);
-            if (OfflineMode)
-            {
-                YargLogger.LogInfo("Playing in offline mode");
-            }
+            LocalizationManager.Initialize(CommandLineArgs.Language);
 
             int profileCount = PlayerContainer.LoadProfiles();
             YargLogger.LogFormatInfo("Loaded {0} profiles", profileCount);
 
-            int savedCount = PlayerContainer.SaveProfiles();
+            int savedCount = PlayerContainer.SaveProfiles(false);
             YargLogger.LogFormatInfo("Saved {0} profiles", savedCount);
 
             GlobalAudioHandler.Initialize<BassAudioManager>();
@@ -99,17 +110,20 @@ namespace YARG
         }
 
 #if UNITY_EDITOR
+
         // For respecting the editor's mute button
-        private bool previousMute = false;
+        private bool _previousMute;
+
         private void Update()
         {
             bool muted = UnityEditor.EditorUtility.audioMasterMute;
-            if (muted != previousMute)
+            if (muted != _previousMute)
             {
                 GlobalAudioHandler.SetMasterVolume(muted ? 0 : SettingsManager.Settings.MasterMusicVolume.Value);
-                previousMute = muted;
+                _previousMute = muted;
             }
         }
+
 #endif
 
         protected override void SingletonDestroy()
@@ -124,6 +138,7 @@ namespace YARG
             InputManager.Destroy();
             PlayerContainer.Destroy();
             GlobalAudioHandler.Close();
+
 #if UNITY_EDITOR
             // Set alpha fading (on the tracks) to off
             Shader.SetGlobalFloat("_IsFading", 0f);
@@ -142,11 +157,13 @@ namespace YARG
             {
                 // When complete, set the newly loaded scene to the active one
                 SceneManager.SetActiveScene(SceneManager.GetSceneByBuildIndex((int) scene));
+                Navigator.Instance.DisableMenuInputs = false;
             };
         }
 
         public void LoadScene(SceneIndex scene)
         {
+            Navigator.Instance.DisableMenuInputs = true;
             // Unload the current scene and load in the new one, or just load in the new one
             if (CurrentScene != SceneIndex.Persistent)
             {
@@ -160,6 +177,61 @@ namespace YARG
             {
                 LoadSceneAdditive(scene);
             }
+            GC.Collect();
+        }
+
+        // Due to the preprocessor, it doesn't know that an instance variable is being used
+        // ReSharper disable once MemberCanBeMadeStatic.Local
+        private string LoadVersion()
+        {
+#if UNITY_EDITOR
+            return LoadVersionFromGit();
+#elif YARG_TEST_BUILD || YARG_NIGHTLY_BUILD
+            var versionFile = Resources.Load<TextAsset>("version");
+            if (versionFile != null)
+            {
+                return versionFile.text;
+            }
+            else
+            {
+                return CurrentVersion;
+            }
+#else
+            return CurrentVersion;
+#endif
+        }
+
+        public static string LoadVersionFromGit()
+        {
+            var process = new Process();
+            process.StartInfo.FileName = "git";
+            process.StartInfo.RedirectStandardOutput = true;
+            process.StartInfo.UseShellExecute = false;
+            process.StartInfo.CreateNoWindow = true;
+
+            // Branch
+            process.StartInfo.Arguments = "rev-parse --abbrev-ref HEAD";
+            process.Start();
+            string branch = process.StandardOutput.ReadToEnd().Trim();
+            process.WaitForExit();
+
+            // Commit Count
+            process.StartInfo.Arguments = "rev-list --count HEAD";
+            process.Start();
+            string commitCount = process.StandardOutput.ReadToEnd().Trim();
+            process.WaitForExit();
+
+            // Commit
+            process.StartInfo.Arguments = "rev-parse --short HEAD";
+            process.Start();
+            string commit = process.StandardOutput.ReadToEnd().Trim();
+            process.WaitForExit();
+
+#if YARG_NIGHTLY_BUILD
+            return $"b{commitCount} ({commit})";
+#else
+            return $"{branch} b{commitCount} ({commit})";
+#endif
         }
     }
 }

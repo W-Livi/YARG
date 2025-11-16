@@ -4,6 +4,7 @@ using YARG.Helpers;
 using YARG.Helpers.Extensions;
 using YARG.Menu.Data;
 using YARG.Menu.ListMenu;
+using YARG.Playlists;
 
 namespace YARG.Menu.MusicLibrary
 {
@@ -16,6 +17,8 @@ namespace YARG.Menu.MusicLibrary
         }
 
         public virtual bool UseAsMadeFamousBy => false;
+
+        public virtual bool UseWiderPrimaryText => false;
 
         public override string GetSecondaryText(bool selected) => string.Empty;
         public virtual string GetSideText(bool selected) => string.Empty;
@@ -45,6 +48,14 @@ namespace YARG.Menu.MusicLibrary
         }
 
         public virtual void FavoriteClick()
+        {
+        }
+
+        public virtual void AddToPlaylist(Playlist playlist)
+        {
+        }
+
+        public virtual void RemoveFromPlaylist(Playlist playlist)
         {
         }
 

@@ -1,4 +1,5 @@
-using System;
+﻿using System;
+using YARG.Core;
 using YARG.Core.Engine;
 using YARG.Core.Game;
 using YARG.Core.Input;
@@ -24,10 +25,21 @@ namespace YARG.Player
         public bool InputsEnabled { get; private set; }
         public ProfileBindings Bindings { get; private set; }
 
-        public EnginePreset EnginePreset { get; private set; }
-        public ThemePreset  ThemePreset  { get; private set; }
-        public ColorProfile ColorProfile { get; private set; }
-        public CameraPreset CameraPreset { get; private set; }
+        public EnginePreset    EnginePreset    { get; private set; }
+        public ThemePreset     ThemePreset     { get; private set; }
+        public ColorProfile    ColorProfile    { get; private set; }
+        public CameraPreset    CameraPreset    { get; private set; }
+        public HighwayPreset   HighwayPreset   { get; private set; }
+        public RockMeterPreset RockMeterPreset { get; private set; }
+
+        /// <summary>
+        /// Whether or not the score is valid.
+        /// </summary>
+        /// <remarks>Could be invalidated due abusing pauses or no fail mode.</remarks>
+        public bool IsScoreValid { get; set; } = true;
+
+        public bool IsReplay { get; private set; }
+        public int ReplayIndex = -1;
 
         /// <summary>
         /// Overrides the engine parameters in the gameplay player.
@@ -35,10 +47,39 @@ namespace YARG.Player
         /// </summary>
         public BaseEngineParameters EngineParameterOverride { get; set; }
 
-        public YargPlayer(YargProfile profile, ProfileBindings bindings, bool resolveDevices)
+        public bool IsMissingMicrophone => !IsReplay && Profile.GameMode == GameMode.Vocals && Bindings.Microphone == null && !Profile.IsBot;
+        public bool IsMissingInputDevice => !IsReplay && Profile.GameMode != GameMode.Vocals && !Bindings.HasDeviceAssigned && !Profile.IsBot;
+
+        public YargPlayer(YargProfile profile, ProfileBindings bindings)
         {
-            SwapToProfile(profile, bindings, resolveDevices);
-            SetPresetsFromProfile();
+            Profile = profile;
+            Bindings = bindings;
+            IsReplay = false;
+        }
+
+        public YargPlayer(ReplayFrame frame, ReplayData replay)
+        {
+            Profile = frame.Profile;
+            Bindings = null;
+            EngineParameterOverride = frame.EngineParameters;
+            IsReplay = true;
+
+            EnginePreset = CustomContentManager.EnginePresets.GetPresetById(Profile.EnginePreset)
+                ?? EnginePreset.Default;
+            ThemePreset = CustomContentManager.ThemePresets.GetPresetById(Profile.ThemePreset)
+                ?? ThemePreset.Default;
+            ColorProfile = replay.GetColorProfile(Profile.ColorProfile)
+                ?? CustomContentManager.ColorProfiles.GetPresetById(Profile.ColorProfile)
+                ?? ColorProfile.Default;
+            CameraPreset = replay.GetCameraPreset(Profile.CameraPreset)
+                ?? CustomContentManager.CameraSettings.GetPresetById(Profile.CameraPreset)
+                ?? CameraPreset.Default;
+
+            HighwayPreset = CustomContentManager.HighwayPresets.GetPresetById(Profile.HighwayPreset)
+                ?? HighwayPreset.Default;
+
+            RockMeterPreset = CustomContentManager.RockMeterPresets.GetPresetById(Profile.RockMeterPreset) ??
+                YARG.Core.Game.RockMeterPreset.Normal;
         }
 
         public void SwapToProfile(YargProfile profile, ProfileBindings bindings, bool resolveDevices)
@@ -65,37 +106,35 @@ namespace YARG.Player
             }
         }
 
-        public void SetPresetsFromProfile()
+        public void RefreshPresets()
         {
             EnginePreset = CustomContentManager.EnginePresets.GetPresetById(Profile.EnginePreset)
                 ?? EnginePreset.Default;
+            Profile.EnginePreset = EnginePreset.Id;
             ThemePreset = CustomContentManager.ThemePresets.GetPresetById(Profile.ThemePreset)
                 ?? ThemePreset.Default;
+            Profile.ThemePreset = ThemePreset.Id;
             ColorProfile = CustomContentManager.ColorProfiles.GetPresetById(Profile.ColorProfile)
                 ?? ColorProfile.Default;
+            Profile.ColorProfile = ColorProfile.Id;
             CameraPreset = CustomContentManager.CameraSettings.GetPresetById(Profile.CameraPreset)
                 ?? CameraPreset.Default;
-        }
+            Profile.CameraPreset = CameraPreset.Id;
+            HighwayPreset = CustomContentManager.HighwayPresets.GetPresetById(Profile.HighwayPreset)
+                ?? HighwayPreset.Default;
+            Profile.HighwayPreset = HighwayPreset.Id;
+            RockMeterPreset = CustomContentManager.RockMeterPresets.GetPresetById(Profile.RockMeterPreset) ??
+                RockMeterPreset.Normal;
+            Profile.RockMeterPreset = RockMeterPreset.Id;
 
-        public void SetPresetsFromReplay(ReplayPresetContainer presetContainer)
-        {
-            var colorProfile = presetContainer.GetColorProfile(Profile.ColorProfile);
-            if (colorProfile is not null)
-            {
-                ColorProfile = colorProfile;
-            }
-
-            var cameraPreset = presetContainer.GetCameraPreset(Profile.CameraPreset);
-            if (cameraPreset is not null)
-            {
-                CameraPreset = cameraPreset;
-            }
         }
 
         public void EnableInputs()
         {
             if (InputsEnabled || Bindings == null)
+            {
                 return;
+            }
 
             Bindings.EnableInputs();
             Bindings.MenuInputProcessed += OnMenuInput;
@@ -107,7 +146,9 @@ namespace YARG.Player
         public void DisableInputs()
         {
             if (!InputsEnabled || Bindings == null)
+            {
                 return;
+            }
 
             Bindings.DisableInputs();
             Bindings.MenuInputProcessed -= OnMenuInput;

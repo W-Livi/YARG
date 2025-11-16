@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Linq;
 using UnityEngine;
 using UnityEngine.InputSystem;
 using YARG.Audio;
@@ -19,6 +20,7 @@ namespace YARG.Input
 
         private SerializedMic _unresolvedMic;
         public MicDevice Microphone { get; private set; }
+        public List<InputDevice> InputDevices => _devices;
 
         private readonly List<SerializedInputDevice> _unresolvedDevices = new();
         private readonly List<InputDevice> _devices = new();
@@ -26,7 +28,8 @@ namespace YARG.Input
         private readonly Dictionary<GameMode, BindingCollection> _bindsByGameMode = new();
         public readonly BindingCollection MenuBindings;
 
-        public bool Empty => _devices.Count < 1 && Microphone is null;
+        public bool HasDeviceAssigned => _devices.Count > 0;
+        public bool Empty => !HasDeviceAssigned && Microphone is null;
 
         public BindingCollection this[GameMode mode] => _bindsByGameMode[mode];
 
@@ -213,10 +216,6 @@ namespace YARG.Input
             _devices.Add(device);
             NotifyDeviceAdded(device);
 
-            // Assign default binds if this device isn't serialized
-            if (index < 0)
-                SetDefaultBinds(device);
-
             return true;
         }
 
@@ -254,14 +253,33 @@ namespace YARG.Input
             return _unresolvedDevices.FindIndex((dev) => dev.MatchesDevice(device));
         }
 
-        public void ClearBindingsForDevice(InputDevice device)
+        public bool MatchesDevice(InputDevice device)
+        {
+            return _unresolvedDevices.Any(dev => dev.MatchesDevice(device));
+        }
+
+        public bool ContainsBindingsForDevice(InputDevice device)
+        {
+            foreach (var bindings in _bindsByGameMode.Values)
+            {
+                if (bindings.ContainsBindingsForDevice(device))
+                    return true;
+            }
+
+            return MenuBindings.ContainsBindingsForDevice(device);
+        }
+
+        public void ClearBindingsForDevice(InputDevice device, bool clearMenuBindings = true)
         {
             foreach (var bindings in _bindsByGameMode.Values)
             {
                 bindings.ClearBindingsForDevice(device);
             }
 
-            MenuBindings.ClearBindingsForDevice(device);
+            if (clearMenuBindings)
+            {
+                MenuBindings.ClearBindingsForDevice(device);
+            }
         }
 
         public void ClearAllBindings()
@@ -277,12 +295,33 @@ namespace YARG.Input
         public bool SetDefaultBinds(InputDevice device)
         {
             if (!ContainsDevice(device))
+            {
                 return false;
+            }
 
             foreach (var bindings in _bindsByGameMode.Values)
+            {
                 bindings.SetDefaultBindings(device);
+            }
 
             MenuBindings.SetDefaultBindings(device);
+
+            return true;
+        }
+
+        public bool SetDefaultBinds(Gamepad gamepad, GamepadBindingMode mode)
+        {
+            if (!ContainsDevice(gamepad))
+            {
+                return false;
+            }
+
+            foreach (var bindings in _bindsByGameMode.Values)
+            {
+                bindings.SetDefaultBindings(gamepad, mode);
+            }
+
+            MenuBindings.SetDefaultBindings(gamepad, mode);
 
             return true;
         }

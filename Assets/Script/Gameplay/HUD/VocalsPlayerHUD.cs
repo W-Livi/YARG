@@ -1,10 +1,14 @@
-﻿using System.Collections;
+﻿using System;
+using System.Collections;
 using Cysharp.Text;
+using DG.Tweening;
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
-using YARG.Core.Chart;
 using YARG.Core.Game;
+using YARG.Helpers.Extensions;
+using YARG.Localization;
+using YARG.Player;
 
 namespace YARG.Gameplay.HUD
 {
@@ -21,26 +25,17 @@ namespace YARG.Gameplay.HUD
         [SerializeField]
         private TextMeshProUGUI _multiplierText;
         [SerializeField]
-        private TextMeshProUGUI _performanceText;
+        private TextNotifications _textNotifications;
+
+        [SerializeField]
+        private PlayerNameDisplay _playerNameDisplay;
 
         private float _comboMeterFillTarget;
 
-        private readonly PerformanceTextScaler _scaler = new(2f);
-        private Coroutine _currentCoroutine;
+        private Coroutine _hudCoroutine;
 
         private bool _shouldPulse;
-
-        protected override void OnChartLoaded(SongChart chart)
-        {
-            _performanceText.text = string.Empty;
-
-            GameManager.BeatEventHandler.Subscribe(PulseBar);
-        }
-
-        protected override void GameplayDestroy()
-        {
-            GameManager.BeatEventHandler.Unsubscribe(PulseBar);
-        }
+        private bool _hudShowing = true;
 
         public void Initialize(EnginePreset enginePreset)
         {
@@ -78,20 +73,15 @@ namespace YARG.Gameplay.HUD
             }
 
             // Update pulse
-            if (_starPowerPulse.color.a > 0f)
+            if (_shouldPulse)
             {
-                var c = _starPowerPulse.color;
-                c.a -= Time.deltaTime * 6f;
-                _starPowerPulse.color = c;
+                float pulse = 1 - (float) GameManager.BeatEventHandler.Visual.StrongBeat.CurrentPercentage;
+                _starPowerPulse.color = Color.white.WithAlpha(pulse);
             }
-        }
-
-        private void PulseBar(Beatline beat)
-        {
-            if (!_shouldPulse || beat.Type == BeatlineType.Weak)
-                return;
-
-            _starPowerPulse.color = Color.white;
+            else
+            {
+                _starPowerPulse.color = Color.white.WithAlpha(0);
+            }
         }
 
         public void UpdateInfo(float phrasePercent, int multiplier,
@@ -114,41 +104,74 @@ namespace YARG.Gameplay.HUD
             _shouldPulse = isStarPowerActive || starPowerPercent >= 0.5;
         }
 
-        public void ShowPhraseHit(double hitPercent)
+        public static string GetVocalPerformanceText(double hitPercent)
         {
-            if (_currentCoroutine != null)
+            string performanceKey = hitPercent switch
             {
-                StopCoroutine(_currentCoroutine);
-            }
-
-            _currentCoroutine = StartCoroutine(ShowNextNotification(hitPercent));
-        }
-
-        private IEnumerator ShowNextNotification(double hitPercent)
-        {
-            _performanceText.text = hitPercent switch
-            {
-                >= 1f   => "AWESOME!",
-                >= 0.8f => "STRONG",
-                >= 0.7f => "GOOD",
-                >= 0.6f => "OKAY",
-                >= 0.1f => "MESSY",
-                _       => "AWFUL"
+                >= 1f => "Awesome",
+                >= 0.8f => "Strong",
+                >= 0.7f => "Good",
+                >= 0.6f => "Okay",
+                >= 0.1f => "Messy",
+                _ => "Awful"
             };
 
-            _scaler.ResetAnimationTime();
+            return Localize.Key("Gameplay.Vocals.Performance", performanceKey);
+        }
 
-            while (_scaler.AnimTimeRemaining > 0f)
+        public void SetHUDShowing(bool show)
+        {
+            if (_hudShowing == show)
             {
-                _scaler.AnimTimeRemaining -= Time.deltaTime;
-                float scale = _scaler.PerformanceTextScale();
-
-                _performanceText.transform.localScale = new Vector3(scale, scale, scale);
-                yield return null;
+                return;
             }
 
-            _performanceText.text = string.Empty;
-            _currentCoroutine = null;
+            _hudShowing = show;
+
+            if (_hudCoroutine != null)
+            {
+                StopCoroutine(_hudCoroutine);
+            }
+
+            _hudCoroutine = StartCoroutine(ShowHUD(_hudShowing));
+        }
+
+        private IEnumerator ShowHUD(bool show)
+        {
+            if (show)
+            {
+                yield return transform
+                    .DORotate(new Vector3(0f, 0f, 0f), 0.25f)
+                    .WaitForCompletion();
+            }
+            else
+            {
+                yield return transform
+                    .DORotate(new Vector3(90f, 0f, 0f), 0.25f)
+                    .WaitForCompletion();
+            }
+
+            _hudCoroutine = null;
+        }
+
+        public void ShowPlayerName(YargPlayer player, int needleId)
+        {
+            _playerNameDisplay.ShowPlayer(player, needleId);
+        }
+
+        public void ShowPhraseHit(double hitPercent, int combo)
+        {
+            if (!Settings.SettingsManager.Settings.DisableTextNotifications.Value)
+            {
+                _textNotifications.UpdateNoteStreak(combo);
+            }
+            var resultText = GetVocalPerformanceText(hitPercent);
+            _textNotifications.ShowVocalPhraseResult(resultText, combo);
+        }
+
+        public void ShowNotification(TextNotificationType notificationType)
+        {
+            _textNotifications.ShowNotification(notificationType);
         }
     }
 }

@@ -86,7 +86,7 @@ namespace YARG.Menu.Persistent
 
                 lock (_lock)
                 {
-                    if (_current != task)
+                    if (_current != task || !gameObject.activeSelf)
                     {
                         mixer.Dispose();
                         continue;
@@ -100,7 +100,7 @@ namespace YARG.Menu.Persistent
                         _mixer = null;
                         NextSong();
                     };
-                    _mixer.Play(true);
+                    _mixer.Play();
 
                     _songText.text = _nowPlaying.Name;
                     _artistText.text = _nowPlaying.Artist;
@@ -127,7 +127,7 @@ namespace YARG.Menu.Persistent
                 {
                     return;
                 }
-                
+
                 if (!_mixer.IsPaused)
                 {
                     _mixer.Pause();
@@ -135,7 +135,7 @@ namespace YARG.Menu.Persistent
                 }
                 else
                 {
-                    _mixer.Play(false);
+                    _mixer.Play();
                     _playPauseButton.sprite = _pauseSprite;
                 }
             }

@@ -5,6 +5,7 @@ using System.Linq;
 using Newtonsoft.Json;
 using UnityEngine;
 using YARG.Core.Logging;
+using YARG.Core.Utility;
 using YARG.Helpers;
 using YARG.Settings.Metadata;
 using YARG.Settings.Types;
@@ -13,6 +14,16 @@ namespace YARG.Settings
 {
     public static partial class SettingsManager
     {
+        private static readonly JsonSerializerSettings JsonSettings = new()
+        {
+            Formatting = Formatting.Indented,
+            Converters = new List<JsonConverter>
+            {
+                new JsonColorConverter(),
+                new JsonVector2Converter()
+            }
+        };
+
         public static SettingContainer Settings { get; private set; }
 
         public static readonly List<Tab> DisplayedSettingsTabs = new()
@@ -23,24 +34,39 @@ namespace YARG.Settings
                 new ButtonRowMetadata(nameof(Settings.OpenCalibrator)),
                 nameof(Settings.AudioCalibration),
                 nameof(Settings.VideoCalibration),
+                nameof(Settings.AccountForHardwareLatency),
 
                 new HeaderMetadata("Venues"),
                 new ButtonRowMetadata(nameof(Settings.OpenVenueFolder)),
+                nameof(Settings.DisableDefaultBackground),
                 nameof(Settings.DisableGlobalBackgrounds),
                 nameof(Settings.DisablePerSongBackgrounds),
+                nameof(Settings.WaitForSongVideo),
+
+                new HeaderMetadata("Gameplay"),
+                nameof(Settings.InputPollingFrequency),
+                nameof(Settings.VoiceActivatedVocalStarPower),
+                nameof(Settings.EnablePracticeSP),
+                nameof(Settings.PracticeRestartDelay),
+                nameof(Settings.NoFailMode),
 
                 new HeaderMetadata("StatusBar"),
                 nameof(Settings.ShowBattery),
                 nameof(Settings.ShowTime),
                 nameof(Settings.MemoryStats),
                 nameof(Settings.FpsStats),
+                nameof(Settings.ShowActivePlayers),
+                nameof(Settings.ShowActiveBots),
 
                 new HeaderMetadata("Other"),
-                nameof(Settings.UseCymbalModelsInFiveLane),
-                nameof(Settings.KickBounceMultiplier),
+                nameof(Settings.ReconnectProfiles),
+                nameof(Settings.AutoCreateProfiles),
+                nameof(Settings.ReduceNoteSpeedByDifficulty),
                 nameof(Settings.ShowCursorTimer),
                 nameof(Settings.PauseOnDeviceDisconnect),
                 nameof(Settings.PauseOnFocusLoss),
+                nameof(Settings.WrapAroundNavigation),
+                nameof(Settings.DiscordRichPresence),
                 nameof(Settings.AmIAwesome),
             },
             new SongManagerTab("SongManager", icon: "Songs")
@@ -50,7 +76,12 @@ namespace YARG.Settings
                 nameof(Settings.UseFullDirectoryForPlaylists),
                 new HeaderMetadata("MusicLibrary"),
                 nameof(Settings.ShowFavoriteButton),
-                nameof(Settings.HighScoreInfo)
+                nameof(Settings.DifficultyRings),
+                nameof(Settings.HighScoreInfo),
+                nameof(Settings.HighScoreHistory),
+                new HeaderMetadata("PlayAShow"),
+                nameof(Settings.PlayAShowTimeout),
+                nameof(Settings.RequireAllDifficulties),
             },
             new MetadataTab("Sound", icon: "Sound")
             {
@@ -65,6 +96,7 @@ namespace YARG.Settings
                 nameof(Settings.SongVolume),
                 nameof(Settings.CrowdVolume),
                 nameof(Settings.SfxVolume),
+                nameof(Settings.DrumSfxVolume),
                 nameof(Settings.PreviewVolume),
                 nameof(Settings.MusicPlayerVolume),
                 nameof(Settings.VocalMonitoring),
@@ -76,22 +108,26 @@ namespace YARG.Settings
                 new HeaderMetadata("Input"),
                 nameof(Settings.MicrophoneSensitivity),
 
-                new HeaderMetadata("Other"),
+                new HeaderMetadata("Gameplay"),
                 nameof(Settings.MuteOnMiss),
                 nameof(Settings.UseStarpowerFx),
-                // nameof(Settings.UseWhammyFx),
-                // nameof(Settings.WhammyPitchShiftAmount),
-                // nameof(Settings.WhammyOversampleFactor),
-                nameof(Settings.ClapsInStarpower),
-                // nameof(Settings.ReverbInStarpower),
+                nameof(Settings.UseCrowdFx),
+                nameof(Settings.OverstrumAndOverhitSoundEffects),
+                nameof(Settings.AlwaysOnDrumSFX),
+                nameof(Settings.UseWhammyFx),
+                nameof(Settings.WhammyPitchShiftAmount),
+
+                new HeaderMetadata("Other"),
                 nameof(Settings.UseChipmunkSpeed),
                 nameof(Settings.ApplyVolumesInMusicLibrary),
+                nameof(Settings.EnableVoxSamples),
             },
             new MetadataTab("Graphics", icon: "Display", new TrackPreviewBuilder())
             {
                 new HeaderMetadata("Display"),
                 nameof(Settings.VSync),
                 nameof(Settings.FpsCap),
+                nameof(Settings.VenueFpsCap),
                 nameof(Settings.FullscreenMode),
                 nameof(Settings.Resolution),
                 nameof(Settings.FpsStats),
@@ -99,16 +135,31 @@ namespace YARG.Settings
                 new HeaderMetadata("Graphics"),
                 nameof(Settings.LowQuality),
                 nameof(Settings.DisableBloom),
+                nameof(Settings.DisableFilmGrain),
                 nameof(Settings.StarPowerHighwayFx),
+                nameof(Settings.SongBackgroundOpacity),
+                nameof(Settings.VenueRenderingQuality),
+                nameof(Settings.VenueAntiAliasing),
 
-                new HeaderMetadata("Other"),
+                new HeaderMetadata("Gameplay"),
+                nameof(Settings.StaticVocalsMode),
+                nameof(Settings.UseThreeLaneLyricsInHarmony),
+                nameof(Settings.EnableTrackEffects),
+                nameof(Settings.EnableHighwayAnimation),
+                nameof(Settings.KickBounceMultiplier),
+                nameof(Settings.HighwayTiltMultiplier),
+
+                new HeaderMetadata("HUD"),
                 nameof(Settings.ShowHitWindow),
                 nameof(Settings.DisableTextNotifications),
                 nameof(Settings.NoteStreakFrequency),
+                nameof(Settings.VocalStreakFrequency),
+                nameof(Settings.CountdownDisplay),
+                nameof(Settings.ShowPlayerNameWhenStartingSong),
                 nameof(Settings.LyricDisplay),
                 nameof(Settings.SongTimeOnScoreBox),
                 nameof(Settings.GraphicalProgressOnScoreBox),
-                nameof(Settings.KeepSongInfoVisible)
+                nameof(Settings.KeepSongInfoVisible),
             },
             new PresetsTab("Presets", icon: "Customization"),
             new AllSettingsTab(),
@@ -136,20 +187,45 @@ namespace YARG.Settings
                 new HeaderMetadata("LightingGeneral"),
                 nameof(Settings.StageKitEnabled),
                 nameof(Settings.DMXEnabled),
-                new HeaderMetadata("DMXChannels"),
+                nameof(Settings.RB3EEnabled),
+                new HeaderMetadata("StageKitDMXChannels"),
                 nameof(Settings.DMXDimmerChannels),
-                nameof(Settings.DMXCueChangeChannel),
                 nameof(Settings.DMXRedChannels),
                 nameof(Settings.DMXGreenChannels),
                 nameof(Settings.DMXBlueChannels),
                 nameof(Settings.DMXYellowChannels),
-                nameof(Settings.DMXFogChannel),
-                nameof(Settings.DMXStrobeChannel),
+                nameof(Settings.DMXFogChannels),
+                nameof(Settings.DMXStrobeChannels),
+                new HeaderMetadata("AdvancedDMXChannels"),
+                nameof(Settings.DMXCueChangeChannel),
+                nameof(Settings.DMXPostProcessingChannel),
+                nameof(Settings.DMXKeyframeChannel),
+                nameof(Settings.DMXBeatlineChannel),
+                nameof(Settings.DMXBonusEffectChannel),
+                nameof(Settings.DMXDrumsChannel),
+                nameof(Settings.DMXGuitarChannel),
+                nameof(Settings.DMXBassChannel),
+                nameof(Settings.DMXKeysChannel),
+                new HeaderMetadata("AdvancedDMXSettings"),
+                nameof(Settings.DMXUniverseChannel),
+                nameof(Settings.DMXDimmerValues),
+                //NYI
+                //nameof(Settings.DMXPerformerChannel)
+                new HeaderMetadata("RB3E"),
+                nameof(Settings.RB3EBroadcastIP),
+
             },
             new MetadataTab("Debug", icon: "Debug")
             {
                 nameof(Settings.InputDeviceLogging),
-                nameof(Settings.ShowAdvancedMusicLibraryOptions)
+                nameof(Settings.ShowAdvancedMusicLibraryOptions),
+                nameof(Settings.MinimumLogLevel),
+            },
+            new MetadataTab("Experimental", icon: "Beaker", new ExperimentalPreviewBuilder())
+            {
+                new HeaderMetadata("Other"),
+                nameof(Settings.BandComboTypeSetting),
+                nameof(Settings.DataStreamEnable),
             }
         };
 
@@ -165,7 +241,8 @@ namespace YARG.Settings
             // Create settings container
             try
             {
-                Settings = JsonConvert.DeserializeObject<SettingContainer>(File.ReadAllText(SettingsFile));
+                string text = File.ReadAllText(SettingsFile);
+                Settings = JsonConvert.DeserializeObject<SettingContainer>(text, JsonSettings);
             }
             catch (Exception e)
             {
@@ -174,6 +251,12 @@ namespace YARG.Settings
 
             // If null, recreate
             Settings ??= new SettingContainer();
+            if (!SettingContainer.IsInitialized && SystemInfo.supportsComputeShaders && SystemInfo.supportsMotionVectors)
+            {
+                Settings.VenueAntiAliasing.Add(
+                     YARG.VenueAntiAliasingMethod.FSR3
+                );
+            }
             SettingContainer.IsInitialized = true;
 
             // Now that we're done loading, call all of the callbacks
@@ -197,7 +280,8 @@ namespace YARG.Settings
             // (such as closing the game before they load)
             if (SettingContainer.IsInitialized && Settings is not null)
             {
-                File.WriteAllText(SettingsFile, JsonConvert.SerializeObject(Settings, Formatting.Indented));
+                var json = JsonConvert.SerializeObject(Settings, JsonSettings);
+                File.WriteAllText(SettingsFile, json);
             }
         }
 

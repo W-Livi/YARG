@@ -1,11 +1,16 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Diagnostics.CodeAnalysis;
 using Cysharp.Threading.Tasks;
 using TMPro;
 using UnityEngine;
 using YARG.Core.Logging;
+using YARG.Helpers;
+using YARG.Integration;
+using YARG.Localization;
 using YARG.Menu.Navigation;
+using YARG.Menu.Persistent;
+using YARG.Player;
+using YARG.Settings;
 using YARG.Song;
 
 namespace YARG
@@ -20,7 +25,37 @@ namespace YARG
         private async void Start()
         {
             using var context = new LoadingContext();
-            context.SetLoadingText("Loading song sources...");
+
+            // Load language
+            try
+            {
+                await LocalizationManager.LoadLanguage(context);
+            }
+            catch (Exception e)
+            {
+                YargLogger.LogException(e);
+            }
+
+            // Check for bad paths
+            if (PathHelper.PathError)
+            {
+                // We may well not be able to localize, so don't even try
+                DialogManager.Instance.ShowMessage("Error creating persistent data directory", $"YARG was unable to create persistent data directory: \n\n{CommandLineArgs.PersistentDataPath}\n\nThis is an unrecoverable error, so YARG will exit.");
+                await DialogManager.Instance.WaitUntilCurrentClosed();
+                Quit();
+            }
+
+            // Load Discord right after (this requires localization)
+            try
+            {
+                DiscordController.Instance.Initialize();
+            }
+            catch (Exception e)
+            {
+                YargLogger.LogException(e);
+            }
+
+            // Load song sources and icons
             try
             {
                 await SongSources.LoadSources(context);
@@ -30,8 +65,27 @@ namespace YARG
                 YargLogger.LogException(ex);
             }
 
+            // Auto connect profiles, using the same order that they were previously connected.
+            if (SettingsManager.Settings.ReconnectProfiles.Value)
+            {
+                PlayerContainer.AutoConnectProfiles();
+            }
+            else
+            {
+                PlayerContainer.ClearProfileOrder();
+            }
+
             // Fast scan (cache read) on startup
             await SongContainer.RunRefresh(true, context);
+        }
+
+        private void Quit()
+        {
+#if UNITY_EDITOR
+            UnityEditor.EditorApplication.isPlaying = false;
+#else
+			Application.Quit();
+#endif
         }
     }
 
@@ -94,6 +148,7 @@ namespace YARG
                     YargLogger.LogException(ex);
                 }
             }
+            GC.Collect();
         }
 
         public async void Dispose()

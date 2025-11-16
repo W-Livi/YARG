@@ -9,7 +9,7 @@ using YARG.Logging.Unity;
 namespace YARG.Logging
 {
     [DefaultExecutionOrder(-4000)]
-    public static class LogHandler
+    public static partial class LogHandler
     {
         private static bool _isInitialized;
 
@@ -30,12 +30,37 @@ namespace YARG.Logging
 
 #if UNITY_EDITOR || YARG_TEST_BUILD
             persistentPath = PathHelper.SanitizePath(Path.Combine(persistentPath, "dev"));
+#elif YARG_NIGHTLY_BUILD
+            persistentPath = PathHelper.SanitizePath(Path.Combine(persistentPath, "nightly"));
 #else
             persistentPath = PathHelper.SanitizePath(Path.Combine(persistentPath, "release"));
 #endif
 
-            _logsDirectory = Path.Combine(persistentPath, "logs");
-            Directory.CreateDirectory(_logsDirectory);
+            try
+            {
+                // Persistent Data Path override passed in from CLI
+                if (!string.IsNullOrWhiteSpace(CommandLineArgs.PersistentDataPath))
+                {
+                    persistentPath = PathHelper.SanitizePath(CommandLineArgs.PersistentDataPath);
+                    Directory.CreateDirectory(persistentPath);
+                }
+
+                _logsDirectory = Path.Combine(persistentPath, "logs");
+                Directory.CreateDirectory(_logsDirectory);
+                string tempFile = Path.Combine(_logsDirectory, Path.GetRandomFileName());
+                using (FileStream fs = new FileStream(tempFile, FileMode.Create))
+                {
+                    // We're only attempting to trigger an exception if the directory isn't writable,
+                    // so we don't actually do anything here
+                }
+                File.Delete(tempFile);
+            }
+            catch (IOException e)
+            {
+                // Hopefully Unity's logger will have more success
+                Debug.LogException(e);
+                return;
+            }
 
             _fileYargLogListener = new FileYargLogListener(GetLogPath());
 
@@ -43,12 +68,13 @@ namespace YARG.Logging
             YargLogger.AddLogListener(new UnityEditorLogListener());
             YargLogger.AddLogListener(_fileYargLogListener);
 
+            RegisterFormatters();
+
             UnityInternalLogWrapper.OverwriteUnityInternals();
 
             Application.logMessageReceivedThreaded += OnLogMessageReceived;
 
 #if UNITY_EDITOR
-            YargLogger.MinimumLogLevel = LogLevel.Debug;
             AppDomain.CurrentDomain.DomainUnload += ShutdownLogHandler;
             UnityEditor.EditorApplication.playModeStateChanged += OnPlayModeStateChanged;
 #else
@@ -99,7 +125,7 @@ namespace YARG.Logging
                     return;
                 }
 
-                var builder = ZString.CreateStringBuilder();
+                using var builder = ZString.CreateStringBuilder();
                 var output = builder; // Necessary to escape 'using variable' status and pass by ref
 
                 using var item = FormatLogItem.MakeItem(

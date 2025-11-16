@@ -2,24 +2,24 @@
 using UnityEngine;
 using UnityEngine.AddressableAssets;
 using UnityEngine.UI;
+using YARG.Helpers.Extensions;
 using YARG.Core;
 using YARG.Core.Engine;
 using YARG.Core.Extensions;
 using YARG.Core.Game;
-using YARG.Helpers;
-using YARG.Helpers.Extensions;
+using YARG.Localization;
 using YARG.Player;
 
 namespace YARG.Menu.ScoreScreen
 {
-    public abstract class ScoreCard<T> : MonoBehaviour where T : BaseStats
+    public abstract class ScoreCard<T> : MonoBehaviour, IScoreCard<T> where T : BaseStats
     {
         [SerializeField]
         private ModifierIcon _modifierIconPrefab;
 
         [Space]
         [SerializeField]
-        protected TextMeshProUGUI AccuracyPercent;
+        private TextMeshProUGUI _accuracyPercent;
 
         [Space]
         [SerializeField]
@@ -49,6 +49,10 @@ namespace YARG.Menu.ScoreScreen
 
         [Space]
         [SerializeField]
+        private ScrollRect _statsRect;
+
+        [Space]
+        [SerializeField]
         private TextMeshProUGUI _notesHit;
         [SerializeField]
         private TextMeshProUGUI _maxStreak;
@@ -56,19 +60,24 @@ namespace YARG.Menu.ScoreScreen
         private TextMeshProUGUI _notesMissed;
         [SerializeField]
         private TextMeshProUGUI _starpowerPhrases;
+        [SerializeField]
+        private TextMeshProUGUI _bandBonusScore;
 
         private ScoreCardColorizer _colorizer;
 
-        protected YargPlayer Player;
+        protected bool IsHighScore;
         protected T Stats;
+
+        public YargPlayer Player { get; private set; }
 
         private void Awake()
         {
             _colorizer = GetComponent<ScoreCardColorizer>();
         }
 
-        public void Initialize(YargPlayer player, T stats)
+        public void Initialize(bool isHighScore, YargPlayer player, T stats)
         {
+            IsHighScore = isHighScore;
             Player = player;
             Stats = stats;
         }
@@ -81,15 +90,8 @@ namespace YARG.Menu.ScoreScreen
             _difficulty.text = Player.Profile.CurrentDifficulty.ToDisplayName();
 
             // Set percent
-            var totalNotes = Stats.NotesHit + Stats.NotesMissed;
-            if (totalNotes == 0)
-            {
-                AccuracyPercent.text = "0%";
-            }
-            else
-            {
-                AccuracyPercent.text = $"{Mathf.FloorToInt((float) Stats.NotesHit / totalNotes * 100f)}%";
-            }
+            _accuracyPercent.text = $"{Mathf.FloorToInt(Stats.Percent * 100f)}%";
+
 
             // Set background and foreground colors
             if (Player.Profile.IsBot)
@@ -97,10 +99,28 @@ namespace YARG.Menu.ScoreScreen
                 _colorizer.SetCardColor(ScoreCardColorizer.ScoreCardColor.Gray);
                 ShowTag("Bot");
             }
-            else if (Stats.MaxCombo == totalNotes)
+            else if (Player.IsReplay)
+            {
+                if (Stats.MaxCombo == Stats.TotalNotes)
+                {
+                    _colorizer.SetCardColor(ScoreCardColorizer.ScoreCardColor.Gold);
+                }
+                else
+                {
+                    _colorizer.SetCardColor(ScoreCardColorizer.ScoreCardColor.Blue);
+                }
+
+                ShowTag("Replay");
+            }
+            else if (Stats.MaxCombo == Stats.TotalNotes)
             {
                 _colorizer.SetCardColor(ScoreCardColorizer.ScoreCardColor.Gold);
                 ShowTag("Full Combo");
+            }
+            else if (IsHighScore)
+            {
+                _colorizer.SetCardColor(ScoreCardColorizer.ScoreCardColor.Blue);
+                ShowTag("High Score");
             }
             else
             {
@@ -111,10 +131,11 @@ namespace YARG.Menu.ScoreScreen
             _score.text = Stats.TotalScore.ToString("N0");
             _starView.SetStars((int) Stats.Stars);
 
-            _notesHit.text = $"{WrapWithColor(Stats.NotesHit)} / {totalNotes}";
+            _notesHit.text = $"{WrapWithColor(Stats.NotesHit)} / {Stats.TotalNotes}";
             _maxStreak.text = WrapWithColor(Stats.MaxCombo);
             _notesMissed.text = WrapWithColor(Stats.NotesMissed);
             _starpowerPhrases.text = $"{WrapWithColor(Stats.StarPowerPhrasesHit)} / {Stats.TotalStarPowerPhrases}";
+            _bandBonusScore.text = WrapWithColor(Stats.BandBonusScore.ToString("N0"));
 
             // Set background icon
             _instrumentIcon.sprite = Addressables
@@ -123,7 +144,7 @@ namespace YARG.Menu.ScoreScreen
 
             // Set engine preset icons
             ModifierIcon.SpawnEnginePresetIcons(_modifierIconPrefab, _modifierIconContainer,
-                Player.EnginePreset, Player.Profile.CurrentInstrument.ToGameMode());
+                Player.EnginePreset, Player.Profile.GameMode);
 
             // Set modifier icons
             foreach (var modifier in EnumExtensions<Modifier>.Values)
@@ -154,5 +175,17 @@ namespace YARG.Menu.ScoreScreen
                 $"<font-weight=700><color=#{ColorUtility.ToHtmlStringRGB(_colorizer.CurrentColor)}>" +
                 $"{s}</color></font-weight>";
         }
+
+        public void ScrollStats(float delta)
+        {
+            _statsRect.MoveVerticalInUnits(delta);
+        }
+    }
+
+    public interface IScoreCard<out T> where T : BaseStats
+    {
+        YargPlayer Player { get; }
+        void ScrollStats(float delta);
+        void SetCardContents();
     }
 }

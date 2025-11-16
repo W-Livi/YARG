@@ -1,9 +1,10 @@
 using System;
 using System.Collections.Generic;
+using Cysharp.Text;
 using UnityEngine;
 using UnityEngine.InputSystem;
+using UnityEngine.InputSystem.Layouts;
 using UnityEngine.InputSystem.LowLevel;
-using UnityEngine.InputSystem.Utilities;
 using YARG.Core.Input;
 using YARG.Core.Logging;
 using YARG.Menu.Persistent;
@@ -28,15 +29,7 @@ namespace YARG.Input
 
         public static event MenuInputEvent MenuInput;
 
-        private static double _beforeUpdateTime;
-        private static double _afterUpdateTime;
         private static double _latestInputTime;
-
-        /// <summary>
-        /// The current time as of when the input system finished updating.
-        /// </summary>
-        /// <seealso cref="InputSystem.onAfterUpdate"/>
-        public static double GameUpdateTime => _afterUpdateTime;
 
         /// <summary>
         /// The time to be used for gameplay input updates.
@@ -53,27 +46,23 @@ namespace YARG.Input
         /// </summary>
         public static double CurrentInputTime => InputState.currentTime;
 
-        private static List<InputDevice> _disabledDevices = new();
+        private static HashSet<InputDevice> _seenDevices = new();
+        private static HashSet<InputDevice> _disabledDevices = new();
+
+        private static HashSet<InputDevice> _registeredDevices = new();
 
         // We do this song and dance of tracking focus changes manually rather than setting
         // InputSettings.backgroundBehavior to IgnoreFocus, so that input is still (largely) disabled when unfocused
         // but devices are not removed only to be re-added when coming back into focus
-        private static bool              _gameFocused;
-        private static bool              _focusChanged;
-        private static List<InputDevice> _backgroundDisabledDevices = new();
-
-        private static IDisposable _onEventListener;
+        private static bool _gameFocused;
+        private static bool _focusChanged;
+        private static HashSet<InputDevice> _backgroundDisabledDevices = new();
 
         public static void Initialize()
         {
-            // High polling rate
-            // TODO: Allow configuring this?
-            InputSystem.pollingFrequency = 500f;
+            InputSystem.pollingFrequency = SettingsManager.Settings.InputPollingFrequency.Value;
 
-            _onEventListener?.Dispose();
-            // InputSystem.onEvent is *not* a C# event, it's a property which is intended to be used with observables
-            // In order to unsubscribe from it you *must* keep track of the IDisposable returned at the end
-            _onEventListener = InputSystem.onEvent.Call(OnEvent);
+            InputSystem.onEvent += OnEvent;
 
             InputSystem.onBeforeUpdate += OnBeforeUpdate;
             InputSystem.onAfterUpdate += OnAfterUpdate;
@@ -94,12 +83,21 @@ namespace YARG.Input
 
                 DeviceAdded?.Invoke(device);
             }
+
+            // Register formatter for device descriptions, we want them to output as JSON in logs
+            Utf16ValueStringBuilder.RegisterTryFormat(
+                (InputDeviceDescription value, Span<char> destination, out int charsWritten, ReadOnlySpan<char> format) =>
+                {
+                    string json = value.ToJson();
+                    charsWritten = json.Length;
+                    return json.AsSpan().TryCopyTo(destination);
+                }
+            );
         }
 
         public static void Destroy()
         {
-            _onEventListener?.Dispose();
-            _onEventListener = null;
+            InputSystem.onEvent -= OnEvent;
 
             InputSystem.onBeforeUpdate -= OnBeforeUpdate;
             InputSystem.onAfterUpdate -= OnAfterUpdate;
@@ -110,11 +108,26 @@ namespace YARG.Input
         public static void RegisterPlayer(YargPlayer player)
         {
             player.MenuInput += OnMenuInput;
+            foreach (var device in player.Bindings.InputDevices)
+            {
+                if (!_registeredDevices.Add(device))
+                {
+                    YargLogger.LogFormatError("Player already registered with device: {0}", device);
+                }
+            }
         }
 
         public static void UnregisterPlayer(YargPlayer player)
         {
             player.MenuInput -= OnMenuInput;
+
+            foreach (var device in player.Bindings.InputDevices)
+            {
+                if (!_registeredDevices.Remove(device))
+                {
+                    YargLogger.LogFormatError("Player not registered with device: {0}", device);
+                }
+            }
         }
 
         private static void OnMenuInput(YargPlayer player, ref GameInput input)
@@ -124,24 +137,28 @@ namespace YARG.Input
 
         private static void OnBeforeUpdate()
         {
-            _beforeUpdateTime = CurrentInputTime;
+            InputUpdateTime = CurrentInputTime;
         }
 
         private static void OnAfterUpdate()
         {
-            _afterUpdateTime = CurrentInputTime;
-            InputUpdateTime = Math.Max(_beforeUpdateTime, _latestInputTime);
+            InputUpdateTime = CurrentInputTime;
 
-            if (_afterUpdateTime < _latestInputTime)
+            if (InputUpdateTime < _latestInputTime)
+            {
                 YargLogger.LogFormatError(
                     "The last input event for this update is in the future! After-update time: {0}, last input time: {1}",
-                    _afterUpdateTime, _latestInputTime);
+                    InputUpdateTime, _latestInputTime
+                );
+            }
 
             // Update bindings using the input update time
-            foreach (var player in PlayerContainer.Players)
+            using (var players = PlayerContainer.PlayerEnumerator)
             {
-                var profileBinds = player.Bindings;
-                profileBinds.UpdateBindingsForFrame(InputUpdateTime);
+                while (players.MoveNext())
+                {
+                    players.Current.Bindings.UpdateBindingsForFrame(InputUpdateTime);
+                }
             }
 
             // Remove any devices that happened to be actually disabled
@@ -150,6 +167,7 @@ namespace YARG.Input
             {
                 foreach (var device in _backgroundDisabledDevices)
                 {
+                    YargLogger.LogFormatDebug("Device disabled: {0}", device.displayName);
                     DeviceRemoved?.Invoke(device);
                 }
             }
@@ -158,37 +176,66 @@ namespace YARG.Input
         }
 
         // For input time handling/debugging
-        private static void OnEvent(InputEventPtr eventPtr)
+        private static void OnEvent(InputEventPtr eventPtr, InputDevice device)
         {
             double currentTime = CurrentInputTime;
 
             // Only check state events
-            if (!eventPtr.IsA<StateEvent>() && !eventPtr.IsA<DeltaStateEvent>()) return;
-
-            // Keep track of the latest input event
-            if (eventPtr.time > _latestInputTime) _latestInputTime = eventPtr.time;
-
-            var device = InputSystem.GetDeviceById(eventPtr.deviceId);
-            if (device is null)
+            if (!eventPtr.IsA<StateEvent>() && !eventPtr.IsA<DeltaStateEvent>())
             {
-                // We need to do the formatting up-front here, InputEventPtr points
-                // to memory which will no longer be valid after the input system update finishes
-                YargLogger.LogWarning($"No device found for event '{eventPtr}'!");
                 return;
             }
 
-            // TODO: Store these events for manual handling later
-            // This would be quite a rare edge-case, but the input system very much allows this
+            // Keep track of the latest input event
+            if (eventPtr.time > _latestInputTime)
+            {
+                _latestInputTime = eventPtr.time;
+            }
+
+            // Rare edge-case, but the input system very much allows this
             if (eventPtr.time > currentTime)
+            {
                 YargLogger.LogFormatError(
-                    "An input event is in the future!\nCurrent time: {0}, event time: {1}, device: {2}", currentTime,
-                    eventPtr.time, device);
+                    "An input event is in the future!\nCurrent time: {0}, event time: {1}, device: {2}",
+                    currentTime, eventPtr.time, device);
+            }
+
+            // TODO: It would be nice to suppress the following for keyboard/mouse when there is no
+            //  profile bound to the keyboard or mouse. Just seems like a waste of cycles to check
+            //  on every input event.
+
+            // For now, ignore keyboard, mouse, and pen entirely
+            if (device is Keyboard or Mouse or Pen)
+            {
+                return;
+            }
+
+            if (!_registeredDevices.Contains(device))
+            {
+                // Don't ask me why, but we get events with no controls changed, so we have to check that there
+                // was a change in addition to checking if it was a noisy control that did change
+                bool controlChanged = false;
+
+                foreach (var control in eventPtr.EnumerateChangedControls())
+                {
+                    if (control.noisy)
+                    {
+                        return;
+                    }
+                    controlChanged = true;
+                    break;
+                }
+
+                if (controlChanged)
+                {
+                    eventPtr.handled = PlayerContainer.TryConnectProfile(device);
+                }
+            }
 
 // Leaving these for posterity
 #if false
             // This check is handled by the engine
-            // It can still happen on rare occasions despite the fixes we've made to prevent it,
-            // but in the cases I've seen it happen, it never reaches the engine
+            // It can still happen on occasion despite the fixes we've made to prevent it
             if (eventPtr.time < InputUpdateTime)
                 YargLogger.LogFormatError("An input event caused time to go backwards!\nInput update time: {0}, event time: {1}, current time: {2}, device: {3}",
                     InputUpdateTime, eventPtr.time, currentTime, device);
@@ -221,31 +268,46 @@ namespace YARG.Input
 
         private static void OnDeviceChange(InputDevice device, InputDeviceChange change)
         {
-            // Ignore the VariantDevice containers from PlasticBand
-            // TODO: Not very elegant, need a better solution from the PlasticBand side
-            if (device.layout.Contains("Variant")) return;
-
             switch (change)
             {
                 case InputDeviceChange.Added:
-                    // Ignore if the device was disabled before being added
-                    if (!device.enabled)
+                {
+                    if (SettingsManager.Settings.InputDeviceLogging.Value)
                     {
-                        _disabledDevices.Add(device);
-                        return;
+                        YargLogger.LogFormatInfo("Device added: {0}\nDescription:\n{1}\n", device.displayName, device.description);
                     }
 
-                    ToastManager.ToastMessage($"Device added: {device.displayName}");
+                    // Don't toast if the device disabled itself
+                    if (device.enabled)
+                    {
+                        ToastManager.ToastMessage($"Device added: {device.displayName}");
+                        DeviceAdded?.Invoke(device);
+                    }
+                    else
+                    {
+                        _disabledDevices.Add(device);
+                    }
 
-                    // Maybe change this to a LogDebug and remove this settings check?
-                    if (SettingsManager.Settings.InputDeviceLogging.Value)
-                        YargLogger.LogFormatInfo("Device added: {0}\nDescription:\n{1}\n", device.displayName, item2: device.description.ToJson());
-
-                    DeviceAdded?.Invoke(device);
+                    _seenDevices.Add(device);
                     break;
+                }
+                case InputDeviceChange.Removed:
+                {
+                    YargLogger.LogFormatDebug("Device removed: {0}", device.displayName);
 
+                    // Don't toast for disabled devices
+                    if (!_disabledDevices.Remove(device))
+                    {
+                        ToastManager.ToastMessage($"Device removed: {device.displayName}");
+                        DeviceRemoved?.Invoke(device);
+                    }
+
+                    _seenDevices.Remove(device);
+                    break;
+                }
                 // case InputDeviceChange.Reconnected: // Fired alongside Added, not needed
                 case InputDeviceChange.Enabled:
+                {
                     // Devices are enabled when gaining window focus,
                     // but we don't want to add devices when this happens
                     if (_focusChanged || Application.isFocused != _gameFocused)
@@ -257,27 +319,20 @@ namespace YARG.Input
                         return;
                     }
 
-                    if (!_disabledDevices.Contains(device)) return;
-
-                    ToastManager.ToastMessage($"Device added: {device.displayName}");
-                    _disabledDevices.Remove(device);
-                    DeviceAdded?.Invoke(device);
-                    break;
-
-                case InputDeviceChange.Removed:
-                    // Don't toast for disabled devices
-                    if (_disabledDevices.Contains(device))
+                    YargLogger.LogFormatDebug("Device enabled: {0}", device.displayName);
+                    if (_disabledDevices.Remove(device))
                     {
-                        _disabledDevices.Remove(device);
-                        return;
+                        // Toast as a newly-added device, for simplicity to the user
+                        ToastManager.ToastMessage($"Device added: {device.displayName}");
+                        DeviceAdded?.Invoke(device);
                     }
 
-                    ToastManager.ToastMessage($"Device removed: {device.displayName}");
-                    DeviceRemoved?.Invoke(device);
+                    _seenDevices.Add(device);
                     break;
-
+                }
                 // case InputDeviceChange.Disconnected: // Fired alongside Removed, not needed
                 case InputDeviceChange.Disabled:
+                {
                     // Devices are disabled when losing window focus,
                     // but we don't want to remove devices when this happens
                     if (_focusChanged || Application.isFocused != _gameFocused)
@@ -289,12 +344,20 @@ namespace YARG.Input
                         return;
                     }
 
-                    if (_disabledDevices.Contains(device)) return;
+                    YargLogger.LogFormatDebug("Device disabled: {0}", device.displayName);
 
-                    ToastManager.ToastMessage($"Device removed: {device.displayName}");
+                    // Only toast if the device was disabled *after* its addition
+                    if (!_disabledDevices.Contains(device) && _seenDevices.Contains(device))
+                    {
+                        // Toast as a removed device, for simplicity to the user
+                        ToastManager.ToastMessage($"Device removed: {device.displayName}");
+                        DeviceRemoved?.Invoke(device);
+                    }
+
+                    _seenDevices.Add(device);
                     _disabledDevices.Add(device);
-                    DeviceRemoved?.Invoke(device);
                     break;
+                }
             }
         }
     }

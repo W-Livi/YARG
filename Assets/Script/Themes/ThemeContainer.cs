@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using UnityEngine;
 using YARG.Core;
+using static YARG.Themes.ThemeManager;
 using Object = UnityEngine.Object;
 
 namespace YARG.Themes
@@ -11,10 +12,7 @@ namespace YARG.Themes
         private readonly GameObject _prefab;
         private readonly bool _builtIn;
 
-        public readonly Dictionary<GameMode, GameObject> NoteCache = new();
-        public readonly Dictionary<GameMode, GameObject> FretCache = new();
-
-        public readonly Dictionary<Type, Dictionary<GameMode, GameObject>> PrefabCache = new();
+        public readonly Dictionary<(VisualStyle style, string Name), GameObject> PrefabCache = new();
 
         public ThemeContainer(GameObject themePrefab, bool builtIn)
         {
@@ -31,14 +29,9 @@ namespace YARG.Themes
         {
             // Destroyed the pre-created prefabs
 
-            foreach (var (_, notePrefab) in NoteCache)
+            foreach (var (_, prefab) in PrefabCache)
             {
-                Object.Destroy(notePrefab);
-            }
-
-            foreach (var (_, fretPrefab) in FretCache)
-            {
-                Object.Destroy(fretPrefab);
+                Object.Destroy(prefab);
             }
 
             if (_builtIn) return;

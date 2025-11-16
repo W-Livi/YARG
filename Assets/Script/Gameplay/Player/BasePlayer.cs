@@ -7,8 +7,11 @@ using YARG.Core.Chart;
 using YARG.Core.Engine;
 using YARG.Core.Input;
 using YARG.Core.Logging;
+using YARG.Core.Replays;
 using YARG.Gameplay.HUD;
+using YARG.Helpers.Extensions;
 using YARG.Input;
+using YARG.Playback;
 using YARG.Player;
 using YARG.Settings;
 
@@ -16,26 +19,30 @@ namespace YARG.Gameplay.Player
 {
     public abstract class BasePlayer : GameplayBehaviour
     {
+        public int HighwayIndex { get; private set; }
+
         public YargPlayer Player { get; private set; }
 
         public float NoteSpeed
         {
             get
             {
+                float noteSpeed = Player.Profile.NoteSpeed * _noteSpeedDifficultyScale;
+
                 // If we're in a replay, don't change the note speed (it should be like a video
                 // slowing down/speeding up). The actual song speed should be taken into account though,
                 // which is saved in the engine parameter override.
-                if (GameManager.IsReplay)
+                if (Player.IsReplay)
                 {
-                    return Player.Profile.NoteSpeed / (float) Player.EngineParameterOverride.SongSpeed;
+                    return noteSpeed / (float) Player.EngineParameterOverride.SongSpeed;
                 }
 
                 if (GameManager.IsPractice && GameManager.SongSpeed < 1)
                 {
-                    return Player.Profile.NoteSpeed;
+                    return noteSpeed;
                 }
 
-                return Player.Profile.NoteSpeed / GameManager.SongSpeed;
+                return noteSpeed / GameManager.SongSpeed;
             }
         }
 
@@ -63,13 +70,15 @@ namespace YARG.Gameplay.Player
         public float Stars => BaseStats.Stars;
 
         public int Score => BaseStats.TotalScore;
+        public int BandBonusScore => BaseStats.BandBonusScore;
         public int Combo => BaseStats.Combo;
         public int NotesHit => BaseStats.NotesHit;
 
         public int TotalNotes { get; protected set; }
 
         public bool IsFc { get; protected set; }
-        public bool IsNewHighScore { get; protected set; }
+
+        public int? LastHighScore { get; private set; }
 
         public IReadOnlyList<GameInput> ReplayInputs => _replayInputs.AsReadOnly();
 
@@ -91,6 +100,10 @@ namespace YARG.Gameplay.Player
 
         private int _replayInputIndex;
 
+        private float _noteSpeedDifficultyScale;
+
+        protected EngineManager.EngineContainer EngineContainer;
+
         protected override void GameplayAwake()
         {
             _replayInputs = new List<GameInput>();
@@ -107,26 +120,31 @@ namespace YARG.Gameplay.Player
                 SantrollerHaptics = Player.Bindings.GetDevicesByType<ISantrollerHaptics>();
             }
 
-            if (!GameManager.IsReplay)
+            if (!Player.IsReplay)
             {
                 SubscribeToInputEvents();
             }
         }
 
-        protected void Initialize(int index, YargPlayer player, SongChart chart)
+        protected void Initialize(int index, YargPlayer player, SongChart chart, int? lastHighScore)
         {
             if (IsInitialized)
             {
                 return;
             }
 
+            HighwayIndex = index;
             Player = player;
 
             SyncTrack = chart.SyncTrack;
 
-            if (GameManager.IsReplay)
+            LastHighScore = lastHighScore;
+
+            _noteSpeedDifficultyScale = Player.Profile.CurrentDifficulty.NoteSpeedScale();
+
+            if (Player.IsReplay && GameManager.ReplayInfo != null)
             {
-                _replayInputs = new List<GameInput>(GameManager.Replay.Frames[index].Inputs);
+                _replayInputs = new List<GameInput>(GameManager.ReplayData.Frames[player.ReplayIndex].Inputs);
                 YargLogger.LogFormatDebug("Initialized replay inputs with {0} inputs", _replayInputs.Count);
             }
 
@@ -139,22 +157,18 @@ namespace YARG.Gameplay.Player
             IsInitialized = true;
         }
 
-        public virtual void UpdateWithTimes(double inputTime)
+        public virtual void GameplayUpdate()
         {
             if (!GameManager.Started || GameManager.Paused)
             {
                 return;
             }
 
-            UpdateInputs(inputTime);
-            UpdateVisualsWithTimes(inputTime);
+            UpdateInputs(GameManager.InputTime);
+            UpdateVisuals(GameManager.VisualTime);
         }
 
-        protected virtual void UpdateVisualsWithTimes(double inputTime)
-        {
-            UpdateVisuals(inputTime);
-        }
-
+        protected abstract void UpdateVisuals(double visualTime);
         protected abstract void ResetVisuals();
 
         public virtual void ResetPracticeSection()
@@ -165,8 +179,6 @@ namespace YARG.Gameplay.Player
 
             ResetVisuals();
         }
-
-        protected abstract void UpdateVisuals(double time);
 
         public abstract void SetPracticeSection(uint start, uint end);
 
@@ -180,17 +192,19 @@ namespace YARG.Gameplay.Player
 
         public virtual void SetReplayTime(double time)
         {
-            _replayInputIndex = BaseEngine.ProcessUpToTime(time, ReplayInputs);
-
             IsFc = true;
 
+            _replayInputIndex = BaseEngine.ProcessUpToTime(time, ReplayInputs);
+
+            SetStemMuteState(false);
+
             ResetVisuals();
-            UpdateVisualsWithTimes(time);
+            UpdateVisuals(time);
         }
 
         protected override void GameplayDestroy()
         {
-            if (!GameManager.IsReplay)
+            if (!Player.IsReplay)
             {
                 UnsubscribeFromInputEvents();
             }
@@ -208,13 +222,7 @@ namespace YARG.Gameplay.Player
             // Video offset is already accounted for
             time += InputCalibration;
 
-            if (Player.Profile.IsBot)
-            {
-                BaseEngine.UpdateBot(time);
-                return;
-            }
-
-            if (GameManager.IsReplay)
+            if (Player.IsReplay && GameManager.ReplayInfo != null)
             {
                 while (_replayInputIndex < ReplayInputs.Count)
                 {
@@ -233,14 +241,7 @@ namespace YARG.Gameplay.Player
                 }
             }
 
-            if (BaseEngine.IsInputQueued)
-            {
-                BaseEngine.UpdateEngineInputs();
-            }
-            else
-            {
-                BaseEngine.UpdateEngineToTime(time);
-            }
+            BaseEngine.Update(time);
         }
 
         private void SubscribeToInputEvents()
@@ -293,8 +294,8 @@ namespace YARG.Gameplay.Player
 
         protected void OnGameInput(ref GameInput input)
         {
-            // Ignore completely if the song hasn't started yet
-            if (!GameManager.Started)
+            // Ignore completely if the song hasn't started yet or player failed
+            if (!GameManager.Started || GameManager.PlayerHasFailed)
                 return;
 
             // Ignore while paused
@@ -322,7 +323,7 @@ namespace YARG.Gameplay.Player
 
             LastInputs[input.Action] = input;
 
-            double adjustedTime = GameManager.GetCalibratedRelativeInputTime(input.Time);
+            double adjustedTime = GameManager.GetRelativeInputTime(input.Time);
             // Apply input offset
             adjustedTime += InputCalibration;
             input = new(adjustedTime, input.Action, input.Integer);
@@ -337,18 +338,29 @@ namespace YARG.Gameplay.Player
 
         protected virtual void OnStarPowerPhraseHit()
         {
-            if (!GameManager.Paused)
+            if (!GameManager.Paused && !GameManager.IsSeekingReplay)
             {
                 GlobalAudioHandler.PlaySoundEffect(SfxSample.StarPowerAward);
             }
         }
 
+        protected virtual void OnStarPowerPhraseMissed()
+        {
+
+        }
+
         protected virtual void OnStarPowerStatus(bool active)
         {
+            var deploySample = SfxSample.StarPowerDeploy;
+            if (SettingsManager.Settings.UseCrowdFx.Value == CrowdFxMode.Enabled)
+            {
+                deploySample = SfxSample.StarPowerDeployCrowd;
+            }
+
             if (!GameManager.Paused)
             {
                 GlobalAudioHandler.PlaySoundEffect(active
-                    ? SfxSample.StarPowerDeploy
+                    ? deploySample
                     : SfxSample.StarPowerRelease);
 
                 SetStarPowerFX(active);
@@ -372,6 +384,16 @@ namespace YARG.Gameplay.Player
             }
         }
 
+        protected void OnComboIncrement(int amount)
+        {
+            GameManager.AddBandCombo(amount);
+        }
+
+        protected void OnComboReset()
+        {
+            GameManager.ResetBandCombo();
+        }
+
         protected static int[] PopulateStarScoreThresholds(float[] multiplierThresh, int baseScore)
         {
             var starScoreThresh = new int[multiplierThresh.Length];
@@ -383,5 +405,7 @@ namespace YARG.Gameplay.Player
 
             return starScoreThresh;
         }
+
+        public abstract (ReplayFrame Frame, ReplayStats Stats) ConstructReplayData();
     }
 }

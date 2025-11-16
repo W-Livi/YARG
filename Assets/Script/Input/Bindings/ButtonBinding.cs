@@ -164,6 +164,14 @@ namespace YARG.Input
             InvokeStateChanged(State);
         }
 
+        public override void ResetState()
+        {
+            PreviousState = default;
+            State = default;
+            _debounceTimer.Stop();
+            InvokeStateChanged(State);
+        }
+
         private float CalculateState(float rawValue)
         {
             return rawValue * _invertSign;
@@ -198,6 +206,10 @@ namespace YARG.Input
         public bool State { get; protected set; }
 
         public ButtonBinding(string name, int action) : base(name, action)
+        {
+        }
+
+        public ButtonBinding(string name, string nameLefty, int action) : base(name, nameLefty, action)
         {
         }
 

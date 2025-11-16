@@ -1,78 +1,75 @@
-using UnityEngine;
+﻿using UnityEngine;
 using UnityEngine.UI;
 using YARG.Core.Engine;
-using YARG.Core.Game;
 using YARG.Gameplay.Player;
+using YARG.Gameplay.Visuals;
+using YARG.Player;
+using YARG.Helpers.UI;
+using YARG.Settings;
 
 namespace YARG.Gameplay.HUD
 {
     public class TrackView : MonoBehaviour
     {
-        private static readonly int _curveFactor = Shader.PropertyToID("_CurveFactor");
-
-        [field: SerializeField]
-        public RawImage TrackImage { get; private set; }
-
         [SerializeField]
         private AspectRatioFitter _aspectRatioFitter;
         [SerializeField]
+        private ScaleByParentSize _UIScaler;
+        [SerializeField]
         private RectTransform _topElementContainer;
+        [SerializeField]
+        private RectTransform _centerElementContainer;
 
         [Space]
         [SerializeField]
         private SoloBox _soloBox;
         [SerializeField]
         private TextNotifications _textNotifications;
+        [SerializeField]
+        private CountdownDisplay _countdownDisplay;
+        [SerializeField]
+        private PlayerNameDisplay _playerNameDisplay;
 
         private TrackPlayer _trackPlayer;
 
         private void Start()
         {
             _aspectRatioFitter.aspectRatio = (float) Screen.width / Screen.height;
+            _UIScaler.Initialize();
         }
 
-        public void Initialize(RenderTexture rt, CameraPreset cameraPreset, TrackPlayer trackPlayer)
+        public void Initialize(TrackPlayer trackPlayer)
         {
-            TrackImage.texture = rt;
-
-            // Clone the material since RawImages don't use instanced materials
-            var newMaterial = new Material(TrackImage.material);
-            newMaterial.SetFloat(_curveFactor, cameraPreset.CurveFactor);
-            TrackImage.material = newMaterial;
-
             _trackPlayer = trackPlayer;
         }
 
-        public void UpdateSizing(int trackCount)
+        public void UpdateHUDPosition(int highwayIndex, int highwayCount)
         {
-            // This equation calculates a good scale for all of the tracks.
-            // It was made with experimentation; there's probably a "real" formula for this.
-            float scale = Mathf.Max(0.7f * Mathf.Log10(trackCount - 1), 0f);
-            scale = 1f - scale;
-
-            TrackImage.transform.localScale = new Vector3(scale, scale, scale);
-        }
-
-        public void UpdateHUDPosition()
-        {
-            var rect = TrackImage.GetComponent<RectTransform>();
-            var viewportPos = _trackPlayer.HUDViewportPosition;
+            var rect = GetComponent<RectTransform>();
+            var topViewportPos = _trackPlayer.HUDTopElementViewportPosition;
+            var centerViewportPos = _trackPlayer.HUDCenterElementViewportPosition;
 
             // Caching this is faster
             var rectRect = rect.rect;
 
-            // Adjust the screen's viewport position to the rect's viewport position
-            // TODO: I have no idea where this "- 0.5f" comes from. Are these calculations correct?
-            var local = new Vector2(
-                (viewportPos.x - 0.5f) * rectRect.width,
-                viewportPos.y * rectRect.height);
-            var screenPos = rect.TransformPoint(local);
+            // Divide tilt by 4; if highway tilt is maxed out, we want the bounds to be (-0.25, 0.25)
+            float hudOffset = HighwayCameraRendering.GetMultiplayerXOffset(highwayIndex, highwayCount,
+                SettingsManager.Settings.HighwayTiltMultiplier.Value / 4);
 
-            // Now, move the MoveContainer based on this
-            RectTransformUtility.ScreenPointToLocalPointInRectangle(
-                (RectTransform) _topElementContainer.parent,
-                screenPos, null, out var localPoint);
-            _topElementContainer.localPosition = localPoint;
+            // Adjust the screen's viewport position to the rect's viewport position
+            // -0.5f as our position is relative to center, not the corner
+            _topElementContainer.localPosition = _topElementContainer.localPosition
+                .WithX(rectRect.width * (topViewportPos.x - 0.5f - hudOffset))
+                .WithY(rectRect.height * (topViewportPos.y - 0.5f));
+
+            _centerElementContainer.localPosition = _centerElementContainer.localPosition
+                .WithX(rectRect.width * (centerViewportPos.x - 0.5f - hudOffset))
+                .WithY(rectRect.height * (centerViewportPos.y - 0.5f));
+        }
+
+        public void UpdateCountdown(double countdownLength, double endTime)
+        {
+            _countdownDisplay.UpdateCountdown(countdownLength, endTime);
         }
 
         public void StartSolo(SoloSection solo)
@@ -80,7 +77,7 @@ namespace YARG.Gameplay.HUD
             _soloBox.StartSolo(solo);
 
             // No text notifications during the solo
-            _textNotifications.gameObject.SetActive(false);
+            _textNotifications.SetActive(false);
         }
 
         public void EndSolo(int soloBonus)
@@ -88,7 +85,7 @@ namespace YARG.Gameplay.HUD
             _soloBox.EndSolo(soloBonus, () =>
             {
                 // Show text notifications again
-                _textNotifications.gameObject.SetActive(true);
+                _textNotifications.SetActive(true);
             });
         }
 
@@ -127,12 +124,18 @@ namespace YARG.Gameplay.HUD
             _textNotifications.ShowStrongFinish();
         }
 
+        public void ShowPlayerName(YargPlayer player)
+        {
+            _playerNameDisplay.ShowPlayer(player);
+        }
+
         public void ForceReset()
         {
-            _textNotifications.gameObject.SetActive(true);
+            _textNotifications.SetActive(true);
 
             _soloBox.ForceReset();
             _textNotifications.ForceReset();
+            _countdownDisplay.ForceReset();
         }
     }
 }

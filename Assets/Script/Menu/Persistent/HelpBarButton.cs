@@ -8,7 +8,7 @@ using YARG.Menu.Navigation;
 
 namespace YARG.Menu.Persistent
 {
-    public class HelpBarButton : MonoBehaviour, IPointerEnterHandler, IPointerExitHandler, IPointerDownHandler
+    public class HelpBarButton : MonoBehaviour, IPointerEnterHandler, IPointerExitHandler, IPointerDownHandler, IPointerUpHandler
     {
         [SerializeField]
         private Image _buttonImage;
@@ -27,9 +27,16 @@ namespace YARG.Menu.Persistent
 
         private Color _buttonBackgroundColor;
 
-        public void SetInfoFromSchemeEntry(NavigationScheme.Entry entry)
+        private bool _clickable = true;
+
+        public void SetInfoFromSchemeEntry(NavigationScheme.Entry entry, bool clickable = true)
         {
-            _entry = entry;
+            _clickable = clickable;
+            if (clickable)
+            {
+                _entry = entry;
+            }
+
             var icons = MenuData.NavigationIcons;
             _buttonBackgroundColor = icons.GetColor(entry.Action);
 
@@ -38,7 +45,7 @@ namespace YARG.Menu.Persistent
             _buttonLabel.color = Color.white;
 
             // Show/hide text and transitions
-            var special = entry.Action is MenuAction.Select or MenuAction.Start;
+            var special = entry.Action is MenuAction.Select or MenuAction.Start or MenuAction.Left or MenuAction.Right;
             _buttonText.gameObject.SetActive(!special);
             _button.transition = special
                 ? Selectable.Transition.None
@@ -53,6 +60,11 @@ namespace YARG.Menu.Persistent
 
         public void OnPointerEnter(PointerEventData eventData)
         {
+            if (!_clickable)
+            {
+                return;
+            }
+
             _buttonBackground.color = _buttonBackgroundColor;
             _buttonImage.color = _buttonBackgroundColor;
             _buttonLabel.color = Color.white;
@@ -61,6 +73,11 @@ namespace YARG.Menu.Persistent
 
         public void OnPointerExit(PointerEventData eventData)
         {
+            if (!_clickable)
+            {
+                return;
+            }
+
             _buttonBackground.color = Color.clear;
             _buttonImage.color = _buttonBackgroundColor;
             _buttonLabel.color = Color.white;
@@ -69,15 +86,27 @@ namespace YARG.Menu.Persistent
 
         public void OnPointerDown(PointerEventData eventData)
         {
+            if (!_clickable)
+            {
+                return;
+            }
+
             _buttonBackground.color = Color.grey;
             _buttonImage.color = Color.grey;
             _buttonLabel.color = Color.grey;
             _buttonText.color = Color.grey;
+
+            _entry?.Invoke();
         }
 
-        public void OnClick()
+        public void OnPointerUp(PointerEventData eventData)
         {
-            _entry?.Invoke();
+            if (!_clickable)
+            {
+                return;
+            }
+
+            _entry?.InvokeHoldOffHandler();
         }
     }
 }

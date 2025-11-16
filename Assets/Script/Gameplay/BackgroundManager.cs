@@ -3,28 +3,39 @@ using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
+using UnityEngine.Rendering.RendererUtils;
 using UnityEngine.UI;
 using UnityEngine.Video;
-using YARG.Core.Extensions;
 using YARG.Core.IO;
 using YARG.Core.Venue;
+using YARG.Helpers.Extensions;
+using YARG.Settings;
 using YARG.Venue;
+#if UNITY_EDITOR_OSX || UNITY_STANDALONE_OSX
+using System.Collections.Generic;
+using YARG.Core.Logging;
+#endif
 
 namespace YARG.Gameplay
 {
     public class BackgroundManager : GameplayBehaviour, IDisposable
     {
         private string VIDEO_PATH;
+
         [SerializeField]
         private VideoPlayer _videoPlayer;
+
         [SerializeField]
         private RawImage _backgroundImage;
 
-        private VenueInfo _venueInfo;
+        [SerializeField]
+        private Image _backgroundDimmer;
+
+        private BackgroundType _type;
+        private VenueSource _source;
 
         private bool _videoStarted = false;
         private bool _videoSeeking = false;
-        private bool _compensateInputOnSeek = false;
 
         // These values are relative to the video, not to song time!
         // A negative start time will delay when the video starts, a positive one will set the video position
@@ -40,48 +51,96 @@ namespace YARG.Gameplay
             // We don't need to update unless we're using a video
             enabled = false;
 
-            var venueInfo = VenueLoader.GetVenue(GameManager.Song);
-            if (!venueInfo.HasValue)
+            using var result = VenueLoader.GetVenue(GameManager.Song, out _source);
+            if (result == null)
             {
                 return;
             }
 
-            _venueInfo = venueInfo.Value;
+            var colorDim = _backgroundDimmer.color.WithAlpha(1 - SettingsManager.Settings.SongBackgroundOpacity.Value);
 
-            var type = _venueInfo.Type;
-            using var stream = _venueInfo.Stream;
+            _backgroundDimmer.color = colorDim;
 
-            switch (type)
+            _type = result.Type;
+            switch (_type)
             {
                 case BackgroundType.Yarground:
-                    var bundle = AssetBundle.LoadFromStream(stream);
+                    var bundle = AssetBundle.LoadFromStream(result.Stream);
+                    AssetBundle shaderBundle = null;
 
                     // KEEP THIS PATH LOWERCASE
                     // Breaks things for other platforms, because Unity
                     var bg = (GameObject) await bundle.LoadAssetAsync<GameObject>(
                         BundleBackgroundManager.BACKGROUND_PREFAB_PATH.ToLowerInvariant());
+                    var renderers = bg.GetComponentsInChildren<Renderer>(true);
+#if UNITY_EDITOR_OSX || UNITY_STANDALONE_OSX
+                    var metalShaders = new Dictionary<string, Shader>();
 
-#if UNITY_EDITOR_LINUX || UNITY_STANDALONE_LINUX || UNITY_EDITOR_OSX || UNITY_STANDALONE_OSX
-                    // Fix for non-Windows machines
-                    // Probably there's a better way to do this.
-					Renderer[] renderers = bg.GetComponentsInChildren<Renderer>();
+                    var shaderBundleData = (TextAsset)await bundle.LoadAssetAsync<TextAsset>(
+                        "Assets/" + BundleBackgroundManager.BACKGROUND_SHADER_BUNDLE_NAME
+                    );
 
-					foreach (Renderer renderer in renderers) {
-						Material[] materials = renderer.sharedMaterials;
+                    if (shaderBundleData != null && shaderBundleData.bytes.Length > 0)
+                    {
+                        YargLogger.LogInfo("Loading Metal shader bundle");
+                        shaderBundle = await AssetBundle.LoadFromMemoryAsync(shaderBundleData.bytes);
+                        var allAssets = shaderBundle.LoadAllAssets<Shader>();
+                        foreach (var shader in allAssets)
+                        {
+                            metalShaders.Add(shader.name, shader);
+                        }
+                    }
+                    else
+                    {
+                        YargLogger.LogInfo("Did not find Metal shader bundle");
+                    }
 
-						for (int i = 0; i < materials.Length; i++) {
-							Material material = materials[i];
-							material.shader = Shader.Find(material.shader.name);
-						}
-					}
+                    // Yarground comes with shaders for dx11/dx12/glcore/vulkan
+                    // Metal shaders used on OSX come in this separate bundle
+                    // Update our renderers to use them
+
+                    foreach (var renderer in renderers)
+                    {
+                        foreach (var material in renderer.sharedMaterials)
+                        {
+                            var shaderName = material.shader.name;
+                            if (metalShaders.TryGetValue(shaderName, out var shader))
+                            {
+                                YargLogger.LogFormatDebug("Found bundled shader {0}", shaderName);
+                                // We found shader from Yarground
+                                material.shader = shader;
+                            }
+                            else
+                            {
+                                YargLogger.LogFormatDebug("Did not find bundled shader {0}", shaderName);
+                                // Fallback to try to find among builtin shaders
+                                material.shader = Shader.Find(shaderName);
+                            }
+                        }
+                    }
 #endif
+                    // Hookup song-specific textures
+                    var textureManager = GetComponent<TextureManager>();
+                    foreach (var renderer in renderers)
+                    {
+                        foreach (var material in renderer.sharedMaterials)
+                        {
+                            textureManager.ProcessMaterial(material);
+                        }
+                    }
 
                     var bgInstance = Instantiate(bg);
+                    var bundleBackgroundManager = bgInstance.GetComponent<BundleBackgroundManager>();
+                    bundleBackgroundManager.Bundle = bundle;
+                    bundleBackgroundManager.ShaderBundle = shaderBundle;
+                    bundleBackgroundManager.SetupVenueCamera(bgInstance);
 
-                    bgInstance.GetComponent<BundleBackgroundManager>().Bundle = bundle;
+                    // Destroy the default camera (venue has its own)
+                    Destroy(_videoPlayer.targetCamera.gameObject);
+
                     break;
                 case BackgroundType.Video:
-                    switch (stream)
+                    switch (result.Stream)
                     {
                         case FileStream fs:
                         {
@@ -96,7 +155,7 @@ namespace YARG.Gameplay
                             VIDEO_PATH = Path.Combine(Application.persistentDataPath, sngStream.Name);
                             using var tmp = File.OpenWrite(VIDEO_PATH);
                             File.SetAttributes(VIDEO_PATH, File.GetAttributes(VIDEO_PATH) | FileAttributes.Temporary | FileAttributes.Hidden);
-                            stream.CopyTo(tmp);
+                            result.Stream.CopyTo(tmp);
                             _videoPlayer.url = VIDEO_PATH;
                             break;
                         }
@@ -109,12 +168,9 @@ namespace YARG.Gameplay
                     enabled = true;
                     break;
                 case BackgroundType.Image:
-                    var texture = new Texture2D(2, 2);
-                    if (texture.LoadImage(stream.ReadBytes((int)stream.Length)))
-                    {
-                        _backgroundImage.gameObject.SetActive(true);
-                        _backgroundImage.texture = texture;
-                    }
+                    _backgroundImage.texture = result.Image.LoadTexture(false);
+                    _backgroundImage.uvRect = new Rect(0f, 0f, 1f, -1f);
+                    _backgroundImage.gameObject.SetActive(true);
                     break;
             }
         }
@@ -124,16 +180,16 @@ namespace YARG.Gameplay
             if (_videoSeeking)
                 return;
 
+            double time = GameManager.SongTime + GameManager.Song.SongOffsetSeconds;
             // Start video
             if (!_videoStarted)
             {
                 // Don't start playing the video until the start of the song
-                if (GameManager.SongTime < 0.0)
+                if (time < 0.0)
                     return;
 
                 // Delay until the start time is reached
-                if (_venueInfo.Source == VenueSource.Song &&
-                    _videoStartTime < 0 && GameManager.SongTime < -_videoStartTime)
+                if (_source == VenueSource.Song && time < -_videoStartTime)
                     return;
 
                 if (_videoEndTime == 0)
@@ -144,7 +200,7 @@ namespace YARG.Gameplay
 
                 // Disable after starting the video if it's not from the song folder
                 // or if video end time is not specified
-                if (_venueInfo.Source != VenueSource.Song || double.IsNaN(_videoEndTime))
+                if (_source != VenueSource.Song || double.IsNaN(_videoEndTime))
                 {
                     enabled = false;
                     return;
@@ -152,7 +208,7 @@ namespace YARG.Gameplay
             }
 
             // End video when reaching the specified end time
-            if (GameManager.SongTime - _videoStartTime >= _videoEndTime)
+            if (time + _videoStartTime >= _videoEndTime)
             {
                 _videoPlayer.Stop();
                 _videoPlayer.enabled = false;
@@ -171,27 +227,29 @@ namespace YARG.Gameplay
             const double endTimeThreshold = 0;
             const double dontLoopThreshold = 0.85;
 
-            if (_venueInfo.Source == VenueSource.Song)
+            if (_source == VenueSource.Song && !GameManager.Song.VideoLoop)
             {
                 _videoStartTime = GameManager.Song.VideoStartTimeSeconds;
                 _videoEndTime = GameManager.Song.VideoEndTimeSeconds;
-                if (_videoEndTime <= 0)
-                    _videoEndTime = double.NaN;
 
                 player.time = _videoStartTime;
                 player.playbackSpeed = GameManager.SongSpeed;
 
-                // Determine whether or not to loop the video
-                if (Math.Abs(_videoStartTime) <= startTimeThreshold && _videoEndTime <= endTimeThreshold)
+                // Only loop the video if it's not around the same length as the song
+                if (Math.Abs(_videoStartTime) < startTimeThreshold &&
+                    _videoEndTime <= endTimeThreshold &&
+                    player.length < GameManager.SongLength * dontLoopThreshold)
                 {
-                    // Only loop the video if it's not around the same length as the song
-                    double lengthRatio = player.length / GameManager.SongLength;
-                    player.isLooping = lengthRatio < dontLoopThreshold;
+                    player.isLooping = true;
+                    _videoEndTime = double.NaN;
                 }
                 else
                 {
-                    // Never loop the video if start/end times are specified
                     player.isLooping = false;
+                    if (_videoEndTime <= 0)
+                    {
+                        _videoEndTime = player.length;
+                    }
                 }
             }
             else
@@ -204,11 +262,11 @@ namespace YARG.Gameplay
 
         public void SetTime(double songTime)
         {
-            switch (_venueInfo.Type)
+            switch (_type)
             {
                 case BackgroundType.Video:
                     // Don't seek videos that aren't from the song
-                    if (_venueInfo.Source != VenueSource.Song)
+                    if (_source != VenueSource.Song)
                         return;
 
                     double videoTime = songTime + _videoStartTime;
@@ -232,8 +290,8 @@ namespace YARG.Gameplay
 
                         // Hack to ensure the video stays synced to the audio
                         _videoSeeking = true; // Signaling flag; must come first
-                        _compensateInputOnSeek = !GameManager.Paused;
-                        GameManager.Pause(showMenu: false);
+                        if (SettingsManager.Settings.WaitForSongVideo.Value)
+                            GameManager.OverridePause();
 
                         _videoPlayer.time = videoTime;
                     }
@@ -246,16 +304,16 @@ namespace YARG.Gameplay
             if (!_videoSeeking)
                 return;
 
-            GameManager.Resume(inputCompensation: _compensateInputOnSeek);
-            player.Play();
+            if (!SettingsManager.Settings.WaitForSongVideo.Value || GameManager.OverrideResume())
+                player.Play();
 
-            enabled = double.IsNaN(_videoEndTime);
+            enabled = !double.IsNaN(_videoEndTime);
             _videoSeeking = false;
         }
 
         public void SetSpeed(float speed)
         {
-            switch (_venueInfo.Type)
+            switch (_type)
             {
                 case BackgroundType.Video:
                     _videoPlayer.playbackSpeed = speed;

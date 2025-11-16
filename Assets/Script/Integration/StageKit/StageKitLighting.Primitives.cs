@@ -4,6 +4,7 @@ using Cysharp.Threading.Tasks;
 using PlasticBand.Haptics;
 using YARG.Core.Chart;
 using YARG.Gameplay;
+using YARG.Playback;
 using Object = UnityEngine.Object;
 
 namespace YARG.Integration.StageKit
@@ -28,7 +29,7 @@ namespace YARG.Integration.StageKit
             _patternIndex = 0;
             // Brought to you by Hacky Hack and the Hacktones
             _gameManager = Object.FindObjectOfType<GameManager>();
-            _gameManager.BeatEventHandler.Subscribe(OnBeat, _beatsPerCycle / _patternList.Length);
+            _gameManager.BeatEventHandler.Visual.Subscribe(OnBeat, BeatEventType.DenominatorBeat, division: _beatsPerCycle / _patternList.Length);
         }
 
         private void OnBeat()
@@ -40,7 +41,7 @@ namespace YARG.Integration.StageKit
             // otherwise they pile up.
             if (!_continuous && _patternIndex == _patternList.Length)
             {
-                _gameManager.BeatEventHandler.Unsubscribe(OnBeat);
+                _gameManager.BeatEventHandler.Visual.Unsubscribe(OnBeat);
                 KillSelf();
             }
 
@@ -54,7 +55,7 @@ namespace YARG.Integration.StageKit
         {
             if (_gameManager != null)
             {
-                _gameManager.BeatEventHandler.Unsubscribe(OnBeat);
+                _gameManager.BeatEventHandler.Visual.Unsubscribe(OnBeat);
             }
         }
     }
@@ -114,7 +115,7 @@ namespace YARG.Integration.StageKit
                 return;
             }
 
-            if ((_listenType & ListenTypes.RedFretDrums) == 0 || eventName != (int) FourLaneDrumPad.RedDrum)
+            if ((_listenType & ListenTypes.RedFretDrums) == 0 || (eventName & (int)FourLaneDrumPad.RedDrum) == 0)
             {
                 return;
             }
@@ -129,7 +130,7 @@ namespace YARG.Integration.StageKit
                 return;
             }
 
-            if ((_listenType & ListenTypes.Next) == 0 || eventName != LightingType.Keyframe_Next)
+            if ((_listenType & ListenTypes.Next) == 0 || eventName != LightingType.KeyframeNext)
             {
                 return;
             }
@@ -236,11 +237,3 @@ namespace YARG.Integration.StageKit
         }
     }
 }
-/*
-    "One thing kids like is to be tricked. For instance, I was going to take my little nephew to Disneyland, but instead
-    I drove him to an old burned-out warehouse. “Oh, no,” I said.  “Disneyland burned down.”  He cried and cried, but I
-    think that deep down, he thought it was a pretty good joke.  I started to drive over to the real Disneyland, but it
-    was getting pretty late."
-
-    - Jack Handey
-*/

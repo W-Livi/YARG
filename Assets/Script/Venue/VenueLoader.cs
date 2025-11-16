@@ -5,6 +5,8 @@ using YARG.Helpers;
 using YARG.Settings;
 using YARG.Core.Song;
 using YARG.Core.Venue;
+using YARG.Core.IO;
+using YARG.Core.Logging;
 
 namespace YARG.Venue
 {
@@ -14,96 +16,110 @@ namespace YARG.Venue
         Song,
     }
 
-    public readonly struct VenueInfo
-    {
-        public readonly VenueSource Source;
-        public readonly BackgroundType Type;
-        public readonly Stream Stream;
-
-        public VenueInfo(VenueSource source, BackgroundType type, Stream stream)
-        {
-            Source = source;
-            Type = type;
-            Stream = stream;
-        }
-    }
-
     public static class VenueLoader
     {
-        private static string _venueFolder = null;
-        public static string VenueFolder => _venueFolder ??= Path.Combine(PathHelper.PersistentDataPath, "venue");
-
-        static VenueLoader()
+        private static readonly string _venueFolder = Path.Combine(PathHelper.PersistentDataPath, "venue");
+        private static readonly string _defaultVenue = Path.Combine(Application.streamingAssetsPath, "venue", "default.yarground");
+        public static string VenueFolder
         {
-            if (!Directory.Exists(VenueFolder))
+            get
             {
-                Directory.CreateDirectory(VenueFolder);
+                if (!Directory.Exists(_venueFolder))
+                {
+                    Directory.CreateDirectory(_venueFolder);
+                }
+                return _venueFolder;
             }
         }
 
-        public static VenueInfo? GetVenue(SongEntry song)
+#nullable enable
+        public static BackgroundResult? GetVenue(SongEntry song, out VenueSource source)
         {
-            const VenueSource songSource = VenueSource.Song;
-
-            // If local backgrounds are disabled, skip right to global
-            if (SettingsManager.Settings.DisablePerSongBackgrounds.Value)
+            BackgroundResult? result = null;
+#nullable disable
+            source = VenueSource.Song;
+            if (!SettingsManager.Settings.DisablePerSongBackgrounds.Value)
             {
-                return GetVenuePathFromGlobal();
+                result = song.LoadBackground();
             }
 
-            var result = song.LoadBackground(
-                BackgroundType.Image |
-                BackgroundType.Video |
-                BackgroundType.Yarground);
-
-            if (result != null)
+            if (!SettingsManager.Settings.DisableGlobalBackgrounds.Value && result == null)
             {
-                return new VenueInfo(songSource, result.Type, result.Stream);
+                source = VenueSource.Global;
+                result = GetVenuePathFromGlobal();
             }
-            return GetVenuePathFromGlobal();
+
+            if (!SettingsManager.Settings.DisableDefaultBackground.Value && result == null)
+            {
+                result = LoadDefaultVenue();
+            }
+
+            return result;
         }
 
-        private static VenueInfo? GetVenuePathFromGlobal()
+#nullable enable
+        private static BackgroundResult? GetVenuePathFromGlobal()
+#nullable disable
         {
-            const VenueSource globalSource = VenueSource.Global;
-
-            // If global backgrounds are disabled, do not load anything here
-            if (SettingsManager.Settings.DisableGlobalBackgrounds.Value)
-            {
-                return null;
-            }
-
             string[] validExtensions =
             {
                 "*.yarground", "*.mp4", "*.mov", "*.webm", "*.png", "*.jpg", "*.jpeg"
             };
 
-            List<string> filePaths = new();
-            foreach (string ext in validExtensions)
+            string venueFolder = VenueFolder;
+            string launcherVenueFolder = PathHelper.VenuePath;
+            var filePaths = new List<string>();
+            foreach (var ext in validExtensions)
             {
-                foreach (var file in Directory.EnumerateFiles(VenueFolder, ext, PathHelper.SafeSearchOptions))
-                {
-                    filePaths.Add(file);
-                }
+                filePaths.AddRange(Directory.EnumerateFiles(venueFolder, ext, PathHelper.SafeSearchOptions));
             }
 
-            if (filePaths.Count <= 0)
+            if (launcherVenueFolder != null && Directory.Exists(launcherVenueFolder))
             {
+                // We limit ourselves to yarground here because that's all that will be downloaded by the launcher
+                filePaths.AddRange(Directory.EnumerateFiles(launcherVenueFolder, "*.yarground", PathHelper.SafeSearchOptions));
+            }
+
+            while (filePaths.Count > 0)
+            {
+                int index = Random.Range(0, filePaths.Count);
+                var file = filePaths[index];
+                switch (Path.GetExtension(file))
+                {
+                    case ".png":
+                    case ".jpg":
+                    case ".jpeg":
+                        var image = YARGImage.Load(file);
+                        if (image != null)
+                        {
+                            return new BackgroundResult(image);
+                        }
+                        break;
+                    case ".mp4":
+                    case ".mov":
+                    case ".webm":
+                        return new BackgroundResult(BackgroundType.Video, File.OpenRead(file));
+                    case ".yarground":
+                        return new BackgroundResult(BackgroundType.Yarground, File.OpenRead(file));
+                    default:
+                        filePaths.RemoveAt(index);
+                        break;
+                }
+            }
+            return null;
+        }
+
+#nullable enable
+        private static BackgroundResult? LoadDefaultVenue()
+#nullable disable
+        {
+            if (!File.Exists(_defaultVenue))
+            {
+                YargLogger.LogWarning("Default venue not found. Build error?");
                 return null;
             }
 
-            var path = filePaths[Random.Range(0, filePaths.Count)];
-
-            var extension = Path.GetExtension(path);
-            var stream = File.OpenRead(path);
-
-            return extension switch
-            {
-                ".yarground"                => new(globalSource, BackgroundType.Yarground, stream),
-                ".mp4" or ".mov" or ".webm" => new(globalSource, BackgroundType.Video, stream),
-                ".png" or ".jpg" or ".jpeg" => new(globalSource, BackgroundType.Image, stream),
-                _                           => null,
-            };
+            return new BackgroundResult(BackgroundType.Yarground, File.OpenRead(_defaultVenue));
         }
     }
 }

@@ -10,15 +10,23 @@ namespace YARG.Themes
 
     public enum ThemeNoteType
     {
-        Normal,
+        Normal = 0,
 
-        HOPO,
-        Tap,
-        Open,
-        OpenHOPO,
+        HOPO     = 1,
+        Tap      = 2,
+        Open     = 3,
+        OpenHOPO = 4,
 
-        Cymbal,
-        Kick
+        Cymbal       = 5,
+        Kick         = 6,
+        Accent       = 7,
+        Ghost        = 8,
+        CymbalAccent = 9,
+        CymbalGhost  = 10,
+
+        White     = 11,
+        Black     = 12,
+        Glissando = 13,
     }
 
     public class ThemeNote : MonoBehaviour
@@ -34,9 +42,12 @@ namespace YARG.Themes
         private MeshEmissionMaterialIndex[] _coloredMaterials;
         [SerializeField]
         private MeshEmissionMaterialIndex[] _coloredMaterialsNoStarPower;
+        [SerializeField]
+        private MeshEmissionMaterialIndex[] _coloredMetalMaterials;
 
         public IEnumerable<MeshEmissionMaterialIndex> ColoredMaterials => _coloredMaterials;
         public IEnumerable<MeshEmissionMaterialIndex> ColoredMaterialsNoStarPower => _coloredMaterialsNoStarPower;
+        public IEnumerable<MeshEmissionMaterialIndex> ColoredMetalMaterials => _coloredMetalMaterials;
 
         private void OnDrawGizmos()
         {

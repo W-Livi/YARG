@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using YARG.Localization;
 
 namespace YARG.Gameplay.HUD
 {
@@ -50,6 +51,8 @@ namespace YARG.Gameplay.HUD
         }
 
         public int Count => _notificationQueue.Count;
+
+        public TextNotificationType? Current => _notificationQueue.Count == 0 ? null : _notificationQueue[0].Type;
     }
 
     public readonly struct TextNotification
@@ -57,21 +60,35 @@ namespace YARG.Gameplay.HUD
         public TextNotificationType Type { get; }
         public string Text { get; }
 
-        public TextNotification(TextNotificationType type, string text)
+        public TextNotification(TextNotificationType type)
         {
             Type = type;
-            Text = text;
+            Text = Localize.Key("Gameplay.Notifications", type);
+        }
+
+        public TextNotification(TextNotificationType type, int formatArg)
+        {
+            Type = type;
+            Text = Localize.KeyFormat(("Gameplay.Notifications", type), formatArg);
+        }
+
+        public TextNotification(TextNotificationType type, string message)
+        {
+            Type = type;
+            Text = message;
         }
     }
 
     public enum TextNotificationType
     {
         NoteStreak,
+        PhraseStreak,
         NewHighScore,
         BassGroove,
         FullCombo,
         StarPowerReady,
         HotStart,
         StrongFinish,
+        VocalPhraseResult
     }
 }

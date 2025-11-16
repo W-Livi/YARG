@@ -305,7 +305,7 @@ ParticleSystem:
     startSpeed:
       serializedVersion: 2
       minMaxState: 0
-      scalar: 5
+      scalar: 1
       minScalar: 5
       maxCurve:
         serializedVersion: 2
@@ -10051,6 +10051,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   _needleVisualContainer: {fileID: 9222097514682650237}
+  _needleRenderer: {fileID: 9222097514682650238}
   _needleTransform: {fileID: 2340206041119870917}
   _hittingParticleGroup: {fileID: 7086846618021614551}
 --- !u!1 &9222097515348364642
@@ -10222,7 +10223,7 @@ ParticleSystem:
     startSpeed:
       serializedVersion: 2
       minMaxState: 0
-      scalar: 2
+      scalar: 0.4
       minScalar: 5
       maxCurve:
         serializedVersion: 2

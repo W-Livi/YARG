@@ -1,26 +1,67 @@
+﻿using System;
+using System.Collections.Generic;
 using UnityEngine;
 using YARG.Core.Chart;
 using YARG.Gameplay.Visuals;
+using YARG.Settings;
+using static YARG.Gameplay.Player.VocalTrack;
 
 namespace YARG.Gameplay.Player
 {
     public class VocalLyricContainer : MonoBehaviour
     {
-        private const float LYRIC_SPACING = 0.25f;
+        public const float LYRIC_SPACING = 0.25f;
+        public const float STATIC_PHRASE_SPACING = .5f;
 
         [Header("Index 0 should be bottom, 2 should be top.")]
         [SerializeField]
-        private Pool[] _pools;
+        private Pool[] _scrollingPools;
+
+        [Header("Index 0 should be bottom, 2 should be top.")]
+        [SerializeField]
+        private Pool[] _staticPools;
+
 
         private readonly double[] _lastLyricEdgeTime =
         {
             double.NegativeInfinity, double.NegativeInfinity, double.NegativeInfinity
         };
 
-        public bool TrySpawnLyric(LyricEvent lyric, VocalNote probableNotePair, bool isStarpower, int harmIndex)
+        public float TrackSpeed { get; set; }
+
+        private string _lastSecondHarmonyLyric;
+
+        public bool TrySpawnScrollingLyric(LyricEvent lyric, VocalNote probableNotePair, bool isStarpower, int totalHarms, int harmIndex)
         {
+            var combineHarmonyLyrics = !SettingsManager.Settings.UseThreeLaneLyricsInHarmony.Value;
+
+            // Choose the correct lane for the lyrics
+            int laneIndex;
+
+            if (combineHarmonyLyrics || totalHarms == 2)
+            {
+                laneIndex = harmIndex switch
+                {
+                    0 => 0,
+                    1 => 2,
+                    2 => 2,
+                    _ => throw new InvalidOperationException("Unexpected lyric lane count")
+                };
+            }
+            else
+            {
+                laneIndex = harmIndex;
+            }
+
+            // When combining lyrics, never show HARM3's lyrics unless they're different from HARM2's lyric
+            if (combineHarmonyLyrics && harmIndex == 2 && _lastSecondHarmonyLyric == lyric.Text)
+            {
+                _lastSecondHarmonyLyric = null;
+                return true;
+            }
+
             // Skip this frame if the pool is full
-            if (!_pools[harmIndex].CanSpawnAmount(1))
+            if (!_scrollingPools[laneIndex].CanSpawnAmount(1))
             {
                 return false;
             }
@@ -29,14 +70,58 @@ namespace YARG.Gameplay.Player
             double length = probableNotePair?.TotalTimeLength ?? 0;
 
             // Spawn the vocal lyric
-            var obj = (VocalLyricElement) _pools[harmIndex].TakeWithoutEnabling();
-            obj.Initialize(lyric, _lastLyricEdgeTime[harmIndex], length, isStarpower, harmIndex);
+            bool allowHiding = harmIndex != 0 && combineHarmonyLyrics;
+            var obj = (VocalScrollingLyricSyllableElement) _scrollingPools[laneIndex].TakeWithoutEnabling();
+            obj.Initialize(lyric, _lastLyricEdgeTime[laneIndex], length, isStarpower, harmIndex, allowHiding);
             obj.EnableFromPool();
 
             // Set the edge time
-            _lastLyricEdgeTime[harmIndex] = obj.ElementTime + (obj.Width + LYRIC_SPACING) / VocalTrack.NOTE_SPEED;
+            _lastLyricEdgeTime[laneIndex] = obj.ElementTime + (obj.Width + LYRIC_SPACING) / TrackSpeed;
+
+            // When combining lyrics, prevent duplicates on HARM3
+            if (combineHarmonyLyrics && harmIndex == 1)
+            {
+                _lastSecondHarmonyLyric = lyric.Text;
+            }
 
             return true;
+        }
+
+        public VocalStaticLyricPhraseElement? TrySpawnStaticLyricPhrase(VocalPhrasePair phrasePair, List<VocalsPhrase> scoringPhrases,
+            int totalHarms, int harmIndex, float x)
+        {
+            var combineHarmonyLyrics = !SettingsManager.Settings.UseThreeLaneLyricsInHarmony.Value;
+
+            int laneIndex;
+
+            if (combineHarmonyLyrics || totalHarms == 2)
+            {
+                laneIndex = harmIndex switch
+                {
+                    0 => 0,
+                    1 => 2,
+                    2 => 2,
+                    _ => throw new InvalidOperationException("Unexpected lyric lane count")
+                };
+            }
+            else
+            {
+                laneIndex = harmIndex;
+            }
+
+            // Skip this frame if the pool is full
+            if (!_staticPools[laneIndex].CanSpawnAmount(1))
+            {
+                return null;
+            }
+
+            // Spawn the vocal lyric
+            bool allowHiding = harmIndex != 0 && combineHarmonyLyrics;
+            var obj = (VocalStaticLyricPhraseElement) _staticPools[laneIndex].TakeWithoutEnabling();
+            obj.Initialize(phrasePair, scoringPhrases, laneIndex, allowHiding, x);
+            obj.EnableFromPool();
+
+            return obj;
         }
 
         public void ResetVisuals()
@@ -45,7 +130,12 @@ namespace YARG.Gameplay.Player
             _lastLyricEdgeTime[1] = double.NegativeInfinity;
             _lastLyricEdgeTime[2] = double.NegativeInfinity;
 
-            foreach (var pool in _pools)
+            foreach (var pool in _scrollingPools)
+            {
+                pool.ReturnAllObjects();
+            }
+
+            foreach (var pool in _staticPools)
             {
                 pool.ReturnAllObjects();
             }

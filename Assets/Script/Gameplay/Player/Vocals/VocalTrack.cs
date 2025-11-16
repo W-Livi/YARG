@@ -1,12 +1,17 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using TMPro;
 using UnityEngine;
 using UnityEngine.Assertions;
 using YARG.Core;
 using YARG.Core.Chart;
+using YARG.Core.Logging;
+using YARG.Gameplay.HUD;
 using YARG.Gameplay.Visuals;
+using YARG.Menu.Persistent;
 using YARG.Player;
+using YARG.Settings;
 
 namespace YARG.Gameplay.Player
 {
@@ -22,50 +27,117 @@ namespace YARG.Gameplay.Player
                 Min = min;
                 Max = max;
             }
+
+            public Range(VocalsRangeShift range)
+            {
+                // Pad out range based on note width
+                float minPitch = range.MinimumPitch - NOTE_WIDTH_MULTIPLIER / 2;
+                float maxPitch = range.MaximumPitch + NOTE_WIDTH_MULTIPLIER / 2;
+
+                // Ensure range is at least a minimum size
+                float rangeMiddle = (range.MaximumPitch + range.MinimumPitch) / 2;
+                Min = Math.Min(rangeMiddle - (MINIMUM_SEMITONE_RANGE / 2), minPitch);
+                Max = Math.Max(rangeMiddle + (MINIMUM_SEMITONE_RANGE / 2), maxPitch);
+
+                var rangePadding = (Max - Min) * RANGE_PADDING_PERCENT;
+                Min -= rangePadding;
+                Max += rangePadding;
+            }
         }
 
         private static readonly int _alphaMultiplier = Shader.PropertyToID("AlphaMultiplier");
 
-        // TODO: This is temporary
-        public const float NOTE_SPEED = 5f;
-
         // TODO: Temporary until color profiles for vocals
-        public readonly Color[] Colors =
+        public static readonly Color[] Colors =
         {
             new(0f, 0.800f, 1f, 1f),
             new(1f, 0.522f, 0f, 1f),
             new(1f, 0.859f, 0f, 1f)
         };
 
-        private const float SPAWN_TIME_OFFSET = 5f;
+        /// <summary>
+        /// Time offset relative to 1.0 note speed
+        /// </summary>
+        public const float SPAWN_TIME_OFFSET = 25f;
 
-        private const float TRACK_TOP = 0.90f;
-        private const float TRACK_TOP_HARMONY = 0.53f;
+        public float SpawnTimeOffset => SPAWN_TIME_OFFSET / TrackSpeed;
 
-        private const float TRACK_BOTTOM = -0.53f;
+        // NOTE: all of these top and bottom edge variables are relative to the note spawners
+        // which are off by 0.07 units. I'm not entirely sure where this offset originated from,
+        // however it should eventually be fixed.
+
+        /// <summary>
+        /// The top edge of the vocal highway track when playing with 1 lyric lane
+        /// </summary>
+        private const float TRACK_TOP_ONE_LANE = 1.25f;
+
+        /// <summary>
+        /// The top edge of the vocal highway track when playing with 2 lyric lanes
+        /// </summary>
+        private const float TRACK_TOP_TWO_LANE = 0.93f;
+
+        /// <summary>
+        /// The top edge of the vocal highway track when playing with 3 lyric lanes
+        /// </summary>
+        private const float TRACK_TOP_THREE_LANE = 0.64f;
+
+        /// <summary>
+        /// The bottom edge of the vocal highway track
+        /// </summary>
+        private const float TRACK_BOTTOM = -0.63f;
+
+        /// <summary>
+        /// The amount of additional padding to apply to the visible semi-tone range, expressed as a percentage.
+        /// </summary>
+        private const float RANGE_PADDING_PERCENT = 0.1f;
 
         private const float NOTE_WIDTH_MULTIPLIER = 1.5f;
 
+        /// <summary>
+        /// The minimum vocal range that should be displayed on the vocal highway, in semi-tones.
+        /// </summary>
         private const float MINIMUM_SEMITONE_RANGE = 20;
 
+        /// <summary>
+        /// The minimum amount of time a vocal range shift should take, in seconds.
+        /// </summary>
         private const double MINIMUM_SHIFT_TIME = 0.25;
 
+        /// <summary>
+        /// The standard scaling factor for vocal scroll speeds.
+        /// </summary>
+        private const float STANDARD_SCROLL_SPEED = 5f;
+
         [SerializeField]
-        private GameObject _vocalPlayerPrefab;
+        private VocalsPlayer _vocalPlayerPrefab;
+        [SerializeField]
+        private VocalPercussionTrack _percussionTrackPrefab;
 
         [Space]
         [SerializeField]
         private MeshRenderer _trackRenderer;
         [SerializeField]
-        private Material _twoLaneHarmonyTrackMaterial;
-        [SerializeField]
-        private Material _threeLaneHarmonyTrackMaterial;
+        private Material[] _trackMaterials;
 
         [Space]
         [SerializeField]
-        private MeshRenderer _soloStarpowerOverlay;
+        private MeshRenderer _oneLaneGuidelineRenderer;
         [SerializeField]
-        private MeshRenderer _harmonyStarpowerOverlay;
+        private MeshRenderer _twoLaneGuidelineRenderer;
+        [SerializeField]
+        private MeshRenderer _threeLaneGuidelineRenderer;
+
+        [Space]
+        [SerializeField]
+        private MeshRenderer _oneLaneStarpowerOverlay;
+        [SerializeField]
+        private MeshRenderer _twoLaneStarpowerOverlay;
+        [SerializeField]
+        private MeshRenderer _threeLaneStarpowerOverlay;
+
+        [Space]
+        [SerializeField]
+        private CountdownDisplay _countdownDisplay;
 
         [Space]
         [SerializeField]
@@ -73,22 +145,27 @@ namespace YARG.Gameplay.Player
         [SerializeField]
         private Transform _playerContainer;
         [SerializeField]
+        private Transform _percussionTrackContainer;
+        [SerializeField]
+        private VocalLyricContainer _lyricContainer;
+
+        [Space]
+        [SerializeField]
         private Pool[] _notePools;
         [SerializeField]
         private Pool _talkiePool;
         [SerializeField]
-        private VocalLyricContainer _lyricContainer;
-        [SerializeField]
         private Pool _phraseLinePool;
 
         private readonly List<VocalsPlayer> _vocalPlayers = new();
-        private bool _currentStarpowerState;
 
-        private float _currentTrackTop = TRACK_TOP;
+        private float _currentTrackTop;
         private Material _starpowerMaterial;
 
         private VocalsTrack _originalVocalsTrack;
         private VocalsTrack _vocalsTrack;
+
+        private Material _guidelineMaterial;
 
         private bool _isRangeChanging;
         private Range _viewRange;
@@ -99,7 +176,14 @@ namespace YARG.Gameplay.Player
         private double _changeStartTime;
         private double _changeEndTime;
 
-        public bool HarmonyShowing => _vocalsTrack.Instrument == Instrument.Harmony;
+        private static int _totalHarms;
+
+        public float TrackSpeed { get; private set; }
+
+        public int LyricLaneCount { get; private set; }
+
+        [HideInInspector]
+        public bool AllowStarPower;
 
         public float CurrentNoteWidth =>
             ((_currentTrackTop - TRACK_BOTTOM) / (_viewRange.Max - _viewRange.Min)) * NOTE_WIDTH_MULTIPLIER;
@@ -110,25 +194,25 @@ namespace YARG.Gameplay.Player
                 "Note pools must be of length three (one for each harmony part).");
         }
 
-        public RenderTexture InitializeRenderTexture(float vocalImageAspectRatio)
+        public void InitializeRenderTexture(float vocalImageAspectRatio, RenderTexture renderTexture)
         {
             // Set the vocal track render texture to a constant aspect ratio
             // to make it easier to work with and size.
-            int height = (int) (Screen.width / vocalImageAspectRatio);
+            // int height = (int) (Screen.width / vocalImageAspectRatio);
+            float height =  Screen.width / vocalImageAspectRatio / Screen.height;
+            var cameraRect = new Rect(0.0f, 1.0f - height, 1.0f, height);
 
-            // Create a render texture for the vocals
-            var descriptor = new RenderTextureDescriptor(
-                Screen.width, height, RenderTextureFormat.ARGBHalf);
-            descriptor.mipCount = 0;
-            var renderTexture = new RenderTexture(descriptor);
+            // Adjust camera rect so vocal track clears stat bar
+            var statsRect = StatsManager.Instance.GetComponent<RectTransform>();
+            var statsHeightNormalized = statsRect.rect.height / Screen.height;
+            cameraRect.y -= statsHeightNormalized;
+            _trackCamera.rect = cameraRect;
 
             // Apply the render texture
             _trackCamera.targetTexture = renderTexture;
-
-            return renderTexture;
         }
 
-        public void Initialize(VocalsTrack vocalsTrack, YargPlayer primaryPlayer)
+        public void Initialize(VocalsTrack vocalsTrack, YargPlayer primaryPlayer, float? trackSpeed)
         {
             _originalVocalsTrack = vocalsTrack;
 
@@ -141,67 +225,190 @@ namespace YARG.Gameplay.Player
 
             _vocalsTrack = _originalVocalsTrack.Clone();
 
-            // Create trackers and indices
+            float scalingFactor;
+
+            // If the chart provided a vocal scrolling speed, use it. Note that the default value of 2300 in DTAs
+            // is treated as no value.
+            if (trackSpeed is not null)
+            {
+                scalingFactor = trackSpeed.Value;
+            }
+
+            // If we're in scrolling lyrics mode and weren't provided a vocal scroll speed, determine if we need
+            // to increase the speed to keep the lyrics from being pushed too far out of sync.
+            else if (!SettingsManager.Settings.StaticVocalsMode.Value)
+            {
+                scalingFactor = GetScrollSpeedScalingFactor(vocalsTrack.Parts); ;
+            }
+
+            // If we're in static lyrics mode, we don't need to worry about checking the lyric offsets.
+            else
+            {
+                scalingFactor = 1f;
+            }
+
+            TrackSpeed = scalingFactor * STANDARD_SCROLL_SPEED;
+
+            _lyricContainer.TrackSpeed = TrackSpeed;
+
+            // Reset first
+            _totalHarms = 0;
+
+            // Get the number of harmony parts in the song
             var parts = _vocalsTrack.Parts;
+            foreach (var part in parts)
+            {
+                if (part.IsHarmony && part.NotePhrases.Count > 0)
+                {
+                    _totalHarms++;
+                }
+            }
+
+            // Choose the correct amount of lanes
+            LyricLaneCount = 1;
+            if (vocalsTrack.Instrument == Instrument.Harmony)
+            {
+                LyricLaneCount = _totalHarms switch
+                {
+                    1 => 1, // Just in case there's a 1-harm chart
+                    2 => 2,
+                    3 => SettingsManager.Settings.UseThreeLaneLyricsInHarmony.Value ? 3 : 2,
+                    _ => 3,
+                };
+            }
+
+            // Create trackers and indices
             _phraseMarkerIndices = new int[parts.Count];
-            _noteTrackers = new PhraseNoteTracker[parts.Count];
-            _lyricTrackers = new PhraseNoteTracker[parts.Count];
+            _scrollingNoteTrackers = new ScrollingPhraseNoteTracker[parts.Count];
+            _scrollingLyricTrackers = new ScrollingPhraseNoteTracker[parts.Count];
+            _staticPhraseTrackers = new StaticPhraseTracker[parts.Count];
+            _staticPhraseQueues = new Queue<VocalStaticLyricPhraseElement>[parts.Count];
+
+
 
             // Create PhraseNoteTrackers
             for (int i = 0; i < parts.Count; i++)
             {
-                _noteTrackers[i] = new PhraseNoteTracker(parts[i], false);
-                _lyricTrackers[i] = new PhraseNoteTracker(parts[i], true);
+                _scrollingNoteTrackers[i] = new ScrollingPhraseNoteTracker(parts[i], false);
+                _scrollingLyricTrackers[i] = new ScrollingPhraseNoteTracker(parts[i], true);
+
+                if (SettingsManager.Settings.UseThreeLaneLyricsInHarmony.Value)
+                {
+                    // If we're in 3-lane mode, just give each lane its own tracker with no merging
+                    _staticPhraseTrackers[i] = new StaticPhraseTracker(GetVocalPhrasePairs(parts[i], null));
+                }
+                else
+                {
+                    // If we're in 2-lane mode...
+                    switch (i)
+                    {
+                        case 0:
+                            // ...HARM1 gets its own tracker with no merging...
+                            _staticPhraseTrackers[i] = new StaticPhraseTracker(GetVocalPhrasePairs(parts[i], null));
+                            break;
+                        case 1:
+                            // ...but HARM2 gets HARM3 as a merged part
+                            _staticPhraseTrackers[i] = new StaticPhraseTracker(GetVocalPhrasePairs(parts[i], parts[i+1]));
+                            break;
+                        // Do nothing for HARM3, because it's being handled by HARM2
+                    }
+                }
+                _staticPhraseQueues[i] = new Queue<VocalStaticLyricPhraseElement>();
             }
 
-            if (vocalsTrack.Instrument == Instrument.Harmony)
+            // Set the correct track material and track top constant
+            _trackRenderer.material = _trackMaterials[LyricLaneCount - 1];
+            _currentTrackTop = LyricLaneCount switch
             {
-                // Set the track material to harmony, if it's harmony (it's solo by default)
-                _trackRenderer.material = _threeLaneHarmonyTrackMaterial;
-                _currentTrackTop = TRACK_TOP_HARMONY;
+                1 => TRACK_TOP_ONE_LANE,
+                2 => TRACK_TOP_TWO_LANE,
+                3 => TRACK_TOP_THREE_LANE,
+                _ => throw new Exception("Unreachable.")
+            };
 
-                // Show the correct starpower overlay
-                _soloStarpowerOverlay.gameObject.SetActive(false);
-                _harmonyStarpowerOverlay.gameObject.SetActive(true);
-                _starpowerMaterial = _harmonyStarpowerOverlay.material;
-            }
-            else
+            // Initialize the starpower overlays
+            _oneLaneStarpowerOverlay.gameObject.SetActive(LyricLaneCount == 1);
+            _twoLaneStarpowerOverlay.gameObject.SetActive(LyricLaneCount == 2);
+            _threeLaneStarpowerOverlay.gameObject.SetActive(LyricLaneCount == 3);
+            _starpowerMaterial = LyricLaneCount switch
             {
-                // Show the correct starpower overlay
-                _harmonyStarpowerOverlay.gameObject.SetActive(false);
-                _soloStarpowerOverlay.gameObject.SetActive(true);
-                _starpowerMaterial = _soloStarpowerOverlay.material;
+                1 => _oneLaneStarpowerOverlay.material,
+                2 => _twoLaneStarpowerOverlay.material,
+                3 => _threeLaneStarpowerOverlay.material,
+                _ => throw new Exception("Unreachable.")
+            };
+
+            // Initialize the guideline renderers
+            _oneLaneGuidelineRenderer.gameObject.SetActive(LyricLaneCount == 1);
+            _twoLaneGuidelineRenderer.gameObject.SetActive(LyricLaneCount == 2);
+            _threeLaneGuidelineRenderer.gameObject.SetActive(LyricLaneCount == 3);
+            _guidelineMaterial = LyricLaneCount switch
+            {
+                1 => _oneLaneGuidelineRenderer.material,
+                2 => _twoLaneGuidelineRenderer.material,
+                3 => _threeLaneGuidelineRenderer.material,
+                _ => throw new Exception("Unreachable.")
+            };
+
+            // this should never happen, yell in the logs if it does
+            if (_vocalsTrack.RangeShifts.Count < 1)
+            {
+                YargLogger.Fail("No vocal range shifts were calculated!");
+                _vocalsTrack.RangeShifts.Add(new(48, 72, 0, 0, 0, 0));
             }
 
             // Set pitch range
-            ChangeRange(_vocalsTrack.RangeShifts[0]);
-            _viewRange = _targetRange;
-            _previousRange = _targetRange;
-            _changeEndTime = _changeStartTime;
+            SetRange(_vocalsTrack.RangeShifts[0]);
 
             // Hide overlay
             _starpowerMaterial.SetFloat(_alphaMultiplier, 0f);
+
+            AllowStarPower = true;
         }
 
         public VocalsPlayer CreatePlayer()
         {
-            var playerObj = Instantiate(_vocalPlayerPrefab, _playerContainer);
-            var player = playerObj.GetComponent<VocalsPlayer>();
-
+            var player = Instantiate(_vocalPlayerPrefab, _playerContainer);
             _vocalPlayers.Add(player);
 
             return player;
         }
 
+        public VocalPercussionTrack CreatePercussionTrack()
+        {
+            var percussionTrack = Instantiate(_percussionTrackPrefab, _percussionTrackContainer);
+
+            // Space out the percussion tracks evenly
+            const float FULL_HEIGHT = TRACK_TOP_ONE_LANE - TRACK_BOTTOM;
+            var offset = FULL_HEIGHT / (_percussionTrackContainer.childCount + 1);
+            for (int i = 0; i < _percussionTrackContainer.childCount; i++)
+            {
+                var child = _percussionTrackContainer.GetChild(i);
+                child.localPosition = child.localPosition.WithZ(TRACK_TOP_ONE_LANE - offset * (i + 1));
+            }
+
+            return percussionTrack;
+        }
+
+        public void UpdateCountdown(double countdownLength, double endTime)
+        {
+            if (_countdownDisplay == null)
+            {
+                return;
+            }
+
+            _countdownDisplay.UpdateCountdown(countdownLength, endTime);
+        }
+
         private void Update()
         {
-            double time = GameManager.RealVisualTime;
+            double time = GameManager.VisualTime;
 
             // Handle range changes
             var ranges = _vocalsTrack.RangeShifts;
             while (_nextRangeIndex < ranges.Count && ranges[_nextRangeIndex].Time < time)
             {
-                ChangeRange(ranges[_nextRangeIndex]);
+                StartRangeChange(ranges[_nextRangeIndex]);
                 _nextRangeIndex++;
             }
 
@@ -210,12 +417,13 @@ namespace YARG.Gameplay.Player
             {
                 float changePercent = (float) YargMath.InverseLerpD(_changeStartTime, _changeEndTime, time);
 
-                // If the change has finished, stop!
                 if (changePercent >= 1f)
                 {
+                    // If the change has finished, stop!
                     _isRangeChanging = false;
                     _viewRange.Min = _targetRange.Min;
                     _viewRange.Max = _targetRange.Max;
+                    UpdateHighwayGuidelines();
                 }
                 else
                 {
@@ -224,6 +432,7 @@ namespace YARG.Gameplay.Player
 
                     _viewRange.Min = newMin;
                     _viewRange.Max = newMax;
+                    UpdateHighwayGuidelines();
                 }
 
                 // Update notes to match new range values
@@ -259,29 +468,44 @@ namespace YARG.Gameplay.Player
             }
         }
 
-        private void ChangeRange(VocalsRangeShift range)
+        private void UpdateHighwayGuidelines()
         {
-            // Pad out range based on note width
-            float minPitch = range.MinimumPitch - NOTE_WIDTH_MULTIPLIER / 2;
-            float maxPitch = range.MaximumPitch + NOTE_WIDTH_MULTIPLIER / 2;
+            const int DEFAULT_GUIDELINE_SCALE = 24;     // The semi-tone range of the guideline texture
 
-            // Ensure range is at least a minimum size
-            float rangeMiddle = (range.MaximumPitch + range.MinimumPitch) / 2;
-            float rangeMin = Math.Min(rangeMiddle - (MINIMUM_SEMITONE_RANGE / 2), minPitch);
-            float rangeMax = Math.Max(rangeMiddle + (MINIMUM_SEMITONE_RANGE / 2), maxPitch);
+            var scale = (_viewRange.Max - _viewRange.Min) / DEFAULT_GUIDELINE_SCALE;
+            var offset = (_viewRange.Min % DEFAULT_GUIDELINE_SCALE) / DEFAULT_GUIDELINE_SCALE;
+            _guidelineMaterial.mainTextureOffset = new Vector2(1, offset);
+            _guidelineMaterial.mainTextureScale = new Vector2(1, scale);
+        }
 
-            // Start the change!
+        private void SetRange(VocalsRangeShift range)
+        {
             _previousRange = _viewRange;
-            _targetRange = new Range(rangeMin, rangeMax);
+            _targetRange = new Range(range);
+            _viewRange = _targetRange;
+
+            _changeStartTime = range.Time;
+            _changeEndTime = range.Time;
+            _isRangeChanging = false;
+
+            UpdateHighwayGuidelines();
+        }
+
+        private void StartRangeChange(VocalsRangeShift range)
+        {
+            _previousRange = _viewRange;
+            _targetRange = new Range(range);
 
             _changeStartTime = range.Time;
             _changeEndTime = range.Time + Math.Max(MINIMUM_SHIFT_TIME, range.TimeLength);
             _isRangeChanging = true;
+
+            // UpdateHighwayGuidelines() is not needed here as it is handled in Update().
         }
 
         public float GetPosForTime(double time)
         {
-            return (float) time * NOTE_SPEED;
+            return (float) time * TrackSpeed;
         }
 
         public float GetPosForPitch(float pitch)
@@ -297,41 +521,243 @@ namespace YARG.Gameplay.Player
             if (!gameObject.activeSelf) return;
 
             // Reset indices
-            for (int i = 0; i < _noteTrackers.Length; i++)
+            for (int i = 0; i < _scrollingNoteTrackers.Length; i++)
             {
                 _phraseMarkerIndices[i] = 0;
-                _noteTrackers[i].Reset();
-                _lyricTrackers[i].Reset();
+                _scrollingNoteTrackers[i].Reset();
+                _scrollingLyricTrackers[i].Reset();
+                _staticPhraseTrackers[i].Reset();
+                _staticPhraseQueues[i].Clear();
+                _highestEnqueuedPhrasePairIndices[i] = -1;
+                _rightEdges[i] = DEFAULT_STATIC_LYRICS_RIGHT_EDGE;
+                _noMoreStaticPhrases[i] = false;
             }
+
 
             // Return everything
             foreach (var pool in _notePools)
             {
                 pool.ReturnAllObjects();
             }
+
             _lyricContainer.ResetVisuals();
             _talkiePool.ReturnAllObjects();
+
+            // Reset pitch range
+            // SetPracticeSection() already takes care of removing irrelevant ranges,
+            // so we can just use the first range here
+            _nextRangeIndex = 1;
+            SetRange(_vocalsTrack.RangeShifts[0]);
         }
 
         public void SetPracticeSection(uint start, uint end)
         {
             // Skip if no vocals
-            if (!gameObject.activeSelf) return;
+            if (!gameObject.activeSelf)
+            {
+                return;
+            }
 
             _vocalsTrack = _originalVocalsTrack.Clone();
 
-            // Remove all notes not in the section
+            // Remove all events not in the section
             for (int i = 0; i < _vocalsTrack.Parts.Count; i++)
             {
                 var part = _vocalsTrack.Parts[i];
                 part.NotePhrases.RemoveAll(n => n.Tick < start || n.Tick >= end);
                 part.TextEvents.RemoveAll(n => n.Tick < start || n.Tick >= end);
 
-                _noteTrackers[i] = new PhraseNoteTracker(part, false);
-                _lyricTrackers[i] = new PhraseNoteTracker(part, true);
+                _scrollingNoteTrackers[i] = new(part, false);
+                _scrollingLyricTrackers[i] = new(part, true);
             }
 
+            for (int i = 0; i < LyricLaneCount; i++)
+            {
+                var phrasePairs = _staticPhraseTrackers[i].PhrasePairs;
+                phrasePairs.RemoveAll(n => n.Tick < start || n.Tick >= end);
+
+                _staticPhraseTrackers[i] = new(phrasePairs);
+                _staticPhraseQueues[i].Clear();
+            }
+
+            // The most recent range shift before the start tick should still be preserved
+            uint rangesStart = _vocalsTrack.RangeShifts.LowerBoundElement(start).Tick;
+            _vocalsTrack.RangeShifts.RemoveAll(n => n.Tick < rangesStart || n.Tick >= end);
+
             ResetPracticeSection();
+        }
+
+        // Should only be used when the chart did not provide an explicit vocal scroll speed. Finds the largest distance
+        // between a note tube and its associated lyric element (computed with respect to the default scroll speed). If
+        // that distance is too big, returns an increased vocal scroll speed
+        private float GetScrollSpeedScalingFactor(List<VocalsPart> parts)
+        {
+            var textWidthTester = gameObject.AddComponent<TextMeshPro>();
+
+            const float DEFAULT_TRACK_SPEED = 5;
+            const int THRESHOLD = 300;
+
+            var greatestOffset = 0d;
+
+            foreach (var part in parts)
+            {
+                var lastEdgeTime = double.NegativeInfinity;
+
+                foreach (var phrase in part.NotePhrases)
+                {
+                    foreach (var lyric in phrase.Lyrics)
+                    {
+                        if (lyric.PitchSlide)
+                        {
+                            continue;
+                        }
+
+                        if (lyric.Time < lastEdgeTime)
+                        {
+                            // This lyric is too early to be spawned right on cue, and will have to be offset.
+                            // Check if the offset is the biggest we've seen so far
+                            greatestOffset = Math.Max(greatestOffset, lastEdgeTime - lyric.Time);
+                        }
+                        var spawnTime = Math.Max(lyric.Time, lastEdgeTime);
+
+                        textWidthTester.text = lyric.Text;
+                        var width = textWidthTester.GetPreferredValues().x;
+
+                        lastEdgeTime = spawnTime + (width + VocalLyricContainer.LYRIC_SPACING) / DEFAULT_TRACK_SPEED;
+                    }
+                }
+            }
+
+            if (greatestOffset < THRESHOLD)
+            {
+                return 1f;
+            }
+
+            // Every 200 units past the threshold increases the scaling factor (plus an initial increase for
+            // passing the threshold in the first place)
+            int severity = (((int)greatestOffset - THRESHOLD) / 200) + 1;
+
+            return 1f + (severity * 0.3f);
+        }
+
+        // Necessary for combining HARM2 and HARM3 in two-lane view
+        public struct VocalPhrasePair
+        {
+            public double Tick;
+            public double Time;
+
+            // In three-lane view, this is always populated
+            // In two-lane view, the HARM2 tracker might have some VocalPhrasePairs where this is null but mergedPhrase is not (for phrases that include
+            // HARM3 but not HARM2). Still always populated for HARM1
+            public VocalsPhrase? MainPhrase;
+
+            // In three-lane view, this is always null
+            // In two-lane view, this is populated with HARM3's phrases. When HARM2 and HARM3 share a phrase, both fields are populated. Still always null
+            // for HARM1
+            public VocalsPhrase? MergedPhrase;
+
+            public VocalPhrasePair(VocalsPhrase? mainPhrase, VocalsPhrase? mergedPhrase)
+            {
+                MainPhrase = mainPhrase;
+                MergedPhrase = mergedPhrase;
+
+                if (mainPhrase is not null)
+                {
+                    Tick = mainPhrase.Tick;
+                    Time = mainPhrase.Time;
+                } else if (mergedPhrase is not null)
+                {
+                    Tick = mergedPhrase.Tick;
+                    Time = mergedPhrase.Time;
+                } else
+                {
+                    throw new InvalidOperationException("Tried to create VocalPhrasePair with two null phrases");
+                }
+            }
+
+            // Percussion is only valid on Solo Vocals and HARM1, so the merged phrase can be assumed false
+            public readonly bool IsPercussion => MainPhrase?.IsPercussion ?? false;
+
+            public readonly bool IsStarPower => MainPhrase?.IsStarPower ?? MergedPhrase.IsStarPower;
+
+            public double Duration => GetLastNoteTotalEndTime() - GetFirstNoteStartTime();
+
+            public double GetFirstNoteStartTime()
+            {
+                if (MergedPhrase is null)
+                {
+                    return MainPhrase.PhraseParentNote.Time;
+                }
+                if (MainPhrase is null)
+                {
+                    return MergedPhrase.PhraseParentNote.Time;
+                } else
+                {
+                    return Math.Min(MainPhrase.PhraseParentNote.Time, MergedPhrase.PhraseParentNote.Time);
+                }
+            }
+
+            public double GetLastNoteTotalEndTime()
+            {
+                if (MergedPhrase is null)
+                {
+                    return MainPhrase.PhraseParentNote.ChildNotes[^1].TotalTimeEnd;
+                }
+                if (MainPhrase is null)
+                {
+                    return MergedPhrase.PhraseParentNote.ChildNotes[^1].TotalTimeEnd;
+                }
+                else
+                {
+                    return Math.Max(MainPhrase.PhraseParentNote.ChildNotes[^1].TotalTimeEnd, MergedPhrase.PhraseParentNote.ChildNotes[^1].TotalTimeEnd);
+                }
+            }
+        }
+
+        private List<VocalPhrasePair> GetVocalPhrasePairs(VocalsPart mainPart, VocalsPart? mergedPart)
+        {
+            var phrasePairs = new List<VocalPhrasePair>();
+
+            if (mergedPart is null)
+            {
+                foreach (var phrase in mainPart.StaticLyricPhrases)
+                {
+                    phrasePairs.Add(new(phrase, null));
+                }
+            }
+            else
+            {
+                var mergedPhraseIdx = 0;
+
+                foreach (var mainPhrase in mainPart.StaticLyricPhrases)
+                {
+                    // Capture any HARM3-only phrases that happened since last time
+                    while (mergedPhraseIdx < mergedPart.StaticLyricPhrases.Count && mergedPart.StaticLyricPhrases[mergedPhraseIdx].Tick < mainPhrase.Tick)
+                    {
+                        phrasePairs.Add(new(null, mergedPart.StaticLyricPhrases[mergedPhraseIdx++]));
+                    }
+
+                    // Capture HARM2+3 phrase
+                    if (mergedPhraseIdx < mergedPart.StaticLyricPhrases.Count && mergedPart.StaticLyricPhrases[mergedPhraseIdx].Tick == mainPhrase.Tick)
+                    {
+                        phrasePairs.Add(new(mainPhrase, mergedPart.StaticLyricPhrases[mergedPhraseIdx++]));
+                    }
+
+                    // Capture HARM2-only phrase
+                    else
+                    {
+                        phrasePairs.Add(new(mainPhrase, null));
+                    }
+                }
+
+                // Capture any remaining HARM3-only phrases after the last HARM2 phrase
+                while (mergedPhraseIdx < mergedPart.StaticLyricPhrases.Count)
+                {
+                    phrasePairs.Add(new(null, mergedPart.StaticLyricPhrases[mergedPhraseIdx++]));
+                }
+            }
+
+            return phrasePairs;
         }
     }
 }

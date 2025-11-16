@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.IO;
@@ -8,6 +8,9 @@ using YARG.Audio;
 using YARG.Core.Audio;
 using YARG.Core.Input;
 using YARG.Input;
+using YARG.Localization;
+using YARG.Menu.Navigation;
+using YARG.Menu.Persistent;
 using YARG.Player;
 using YARG.Settings;
 
@@ -47,11 +50,11 @@ namespace YARG.Menu.Calibrator
         private double _time;
 #nullable disable
 
+        private bool wasWhammyEnabled = SettingsManager.Settings.UseWhammyFx.Value;
+
         private void Start()
         {
             UpdateForState();
-
-            InputManager.MenuInput += OnMenuInput;
         }
 
         private void OnDestroy()
@@ -83,16 +86,9 @@ namespace YARG.Menu.Calibrator
                     break;
                 case State.Audio:
                     _audioCalibrateText.color = Color.green;
-                    _audioCalibrateText.text = "Detected";
+                    _audioCalibrateText.text = Localize.Key("Menu.Calibrator.Detected");
 
                     _calibrationTimes.Add(Time.realtimeSinceStartupAsDouble - _time);
-                    break;
-                case State.Starting:
-                case State.AudioDone:
-                    if (input.GetAction<MenuAction>() == MenuAction.Red)
-                    {
-                        BackButton();
-                    }
                     break;
             }
         }
@@ -124,6 +120,7 @@ namespace YARG.Menu.Calibrator
             {
                 case State.Starting:
                     _startingStateContainer.SetActive(true);
+                    SetConfirmNavigation();
                     break;
                 case State.AudioWaiting:
                     _audioCalibrateContainer.SetActive(true);
@@ -133,6 +130,8 @@ namespace YARG.Menu.Calibrator
                     _audioCalibrateText.text =
                         "Press any button on each tick you hear.\n" +
                         "Press any button when you are ready.";
+                    SetEmptyNavigation();
+                    StartCoroutine(EnableInputAfterDelay());
                     break;
                 case State.Audio:
                     _audioCalibrateContainer.SetActive(true);
@@ -141,19 +140,56 @@ namespace YARG.Menu.Calibrator
                     const float SPEED = 1f;
                     const double VOLUME = 1.0;
                     var file = Path.Combine(Application.streamingAssetsPath, "calibration_music.ogg");
+
+                    //Temporarily disable whammy so we don't have to deal with pitch shift delay
+                    SettingsManager.Settings.UseWhammyFx.Value = false;
+
                     _mixer = GlobalAudioHandler.LoadCustomFile(file, SPEED, VOLUME);
                     _mixer.SongEnd += OnAudioEnd;
-                    _mixer.Play(true);
+                    _mixer.Play();
                     _time = Time.realtimeSinceStartupAsDouble;
                     StartCoroutine(AudioCalibrateCoroutine());
                     break;
                 case State.AudioDone:
+                    //Restore whammy settings
+                    SettingsManager.Settings.UseWhammyFx.Value = wasWhammyEnabled;
+
                     _audioCalibrateContainer.SetActive(true);
                     CalculateAudioLatency();
+                    SetBackNavigation();
+                    InputManager.MenuInput -= OnMenuInput;
                     break;
             }
         }
 
+        private IEnumerator EnableInputAfterDelay()
+        {
+            yield return new WaitForSeconds(0.5f);
+            InputManager.MenuInput += OnMenuInput;
+        }
+
+        private void SetConfirmNavigation()
+        {
+            Navigator.Instance.PushScheme(new NavigationScheme(new()
+            {
+                new NavigationScheme.Entry(MenuAction.Green, "Menu.Common.Confirm", () => StartAudioMode()),
+                new NavigationScheme.Entry(MenuAction.Red, "Menu.Common.Back", () => BackButton()),
+            }, true));
+        }
+
+        private void SetBackNavigation()
+        {
+            Navigator.Instance.PopScheme();
+            Navigator.Instance.PushScheme(new NavigationScheme(new()
+            {
+                new NavigationScheme.Entry(MenuAction.Red, "Menu.Common.Back", () => BackButton()),
+            }, true));
+        }
+        private void SetEmptyNavigation()
+        {
+            Navigator.Instance.PopScheme();
+            Navigator.Instance.PushScheme(NavigationScheme.Empty);
+        }
         private void CalculateAudioLatency()
         {
             // Drop all discrepancies
@@ -169,9 +205,7 @@ namespace YARG.Menu.Calibrator
             if (_calibrationTimes.Count <= 8)
             {
                 _audioCalibrateText.color = Color.red;
-                _audioCalibrateText.text =
-                    "There isn't enough data to get an accurate result.\n" +
-                    "Press back to exit.";
+                _audioCalibrateText.text = Localize.Key("Menu.Calibrator.NotEnoughData");
                 return;
             }
 
@@ -219,7 +253,9 @@ namespace YARG.Menu.Calibrator
             double median = diffs.Count % 2 != 0 ? diffs[mid] : (diffs[mid] + diffs[mid - 1]) / 2f;
 
             // Set calibration
-            int calibration = (int)Math.Round(median * 1000) - GlobalAudioHandler.PlaybackLatency;
+            int calibration = (int)Math.Round(median * 1000);
+            if (SettingsManager.Settings.AccountForHardwareLatency.Value)
+                calibration -= GlobalAudioHandler.PlaybackLatency;
             SettingsManager.Settings.AudioCalibration.Value = calibration;
 
             // Set text

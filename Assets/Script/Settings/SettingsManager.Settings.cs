@@ -1,24 +1,29 @@
 ﻿using System.Collections.Generic;
-using System.Runtime.CompilerServices;
+using System.Net;
 using UnityEngine;
 using UnityEngine.InputSystem;
-using UnityEngine.Rendering.Universal.Internal;
-using YARG.Audio;
 using YARG.Core.Audio;
+using YARG.Core.Engine;
 using YARG.Core.Logging;
-using YARG.Core.Song;
+using YARG.Gameplay;
 using YARG.Gameplay.HUD;
 using YARG.Helpers;
 using YARG.Integration;
+using YARG.Integration.RB3E;
 using YARG.Integration.Sacn;
 using YARG.Integration.StageKit;
+using YARG.Localization;
+using YARG.Menu;
 using YARG.Menu.MusicLibrary;
 using YARG.Menu.Persistent;
 using YARG.Menu.Settings;
+using YARG.Playback;
 using YARG.Player;
+using YARG.Scores;
 using YARG.Settings.Types;
 using YARG.Song;
 using YARG.Venue;
+using static FidelityFX.FSR3.Fsr3Upscaler;
 
 namespace YARG.Settings
 {
@@ -26,8 +31,6 @@ namespace YARG.Settings
     {
         public class SettingContainer
         {
-            //public static event System.Action OnDMXChannelsChanged;
-
             /// <summary>
             /// Have the settings been initialized?
             /// </summary>
@@ -37,9 +40,14 @@ namespace YARG.Settings
 
             public List<string> SongFolders = new();
 
-            public bool ShowAntiPiracyDialog          = true;
+            public bool ShowAntiPiracyDialog = true;
             public bool ShowEngineInconsistencyDialog = true;
-            public SongAttribute LibrarySort = SongAttribute.Name;
+            public bool ShowExperimentalWarningDialog = true;
+
+            public SortAttribute LibrarySort = SortAttribute.Name;
+            public SortAttribute PreviousLibrarySort = SortAttribute.Name;
+
+            public Dictionary<string, HUDPositionProfile> HUDPositionProfiles = new();
 
             #endregion
 
@@ -54,25 +62,53 @@ namespace YARG.Settings
             public IntSetting AudioCalibration { get; } = new(0);
             public IntSetting VideoCalibration { get; } = new(0);
 
+            public ToggleSetting AccountForHardwareLatency { get; } = new(true);
+
             public void OpenVenueFolder()
             {
                 FileExplorerHelper.OpenFolder(VenueLoader.VenueFolder);
             }
 
+            public ToggleSetting NoFailMode { get; } = new(false);
+
+            public ToggleSetting DisableDefaultBackground  { get; } = new(false);
             public ToggleSetting DisableGlobalBackgrounds  { get; } = new(false);
             public ToggleSetting DisablePerSongBackgrounds { get; } = new(false);
+            public ToggleSetting WaitForSongVideo          { get; } = new(true);
 
-            public ToggleSetting ShowBattery { get; } = new(false);
-            public ToggleSetting ShowTime    { get; } = new(false, ShowTimeCallback);
+
+            public SliderSetting InputPollingFrequency { get; } = new(250f, 60f, 1000f,
+                (value) => InputSystem.pollingFrequency = value
+            );
+            public ToggleSetting VoiceActivatedVocalStarPower { get; } = new(true);
+            public ToggleSetting EnablePracticeSP { get; } = new(false);
+            public SliderSetting PracticeRestartDelay { get; } = new(2f, 0.5f, 5f);
+
+            public ToggleSetting ShowBattery { get; } = new(false, ShowBatteryCallback);
+            public ToggleSetting ShowTime { get; } = new(false, ShowTimeCallback);
             public ToggleSetting MemoryStats { get; } = new(false, MemoryStatsCallback);
+            public ToggleSetting ShowActivePlayers { get; } = new(false, ShowActivePlayersCallback);
+            public ToggleSetting ShowActiveBots { get; } = new(false, ShowActiveBotsCallback);
 
-            public ToggleSetting UseCymbalModelsInFiveLane { get; } = new(true);
-            public SliderSetting KickBounceMultiplier      { get; } = new(1f, 0f, 2f);
+            public ToggleSetting ReconnectProfiles  { get; } = new(true);
+            public ToggleSetting AutoCreateProfiles { get; } = new(true);
 
-            public SliderSetting ShowCursorTimer { get; } = new(2f, 0f, 5f);
+            public ToggleSetting ReduceNoteSpeedByDifficulty { get; } = new(true);
+
+            public SliderSetting ShowCursorTimer      { get; } = new(2f, 0f, 5f);
 
             public ToggleSetting PauseOnDeviceDisconnect { get; } = new(true);
-            public ToggleSetting PauseOnFocusLoss     { get; } = new(true);
+            public ToggleSetting PauseOnFocusLoss { get; } = new(true);
+
+            public ToggleSetting WrapAroundNavigation { get; } = new(true);
+
+            public DropdownSetting<DiscordRichPresenceMode> DiscordRichPresence { get; }
+                = new(DiscordRichPresenceMode.Show, DiscordRichPresenceCallback)
+                {
+                    DiscordRichPresenceMode.Show,
+                    DiscordRichPresenceMode.Limited,
+                    DiscordRichPresenceMode.Hide
+                };
 
             public ToggleSetting AmIAwesome { get; } = new(false);
 
@@ -80,41 +116,81 @@ namespace YARG.Settings
 
             #region Songs
 
-            public ToggleSetting AllowDuplicateSongs          { get; } = new(true);
+            public ToggleSetting AllowDuplicateSongs { get; } = new(true, _ => MusicLibraryMenu.SetReload(MusicLibraryReloadState.Partial));
             public ToggleSetting UseFullDirectoryForPlaylists { get; } = new(false);
 
             public ToggleSetting ShowFavoriteButton { get; } = new(true);
 
+            public SliderSetting PlayAShowTimeout { get; } = new (10.0f, 1.0f, 30.0f);
+            public ToggleSetting RequireAllDifficulties { get; } = new(true);
+
+            public DropdownSetting<DifficultyRingMode> DifficultyRings { get; }
+                = new(DifficultyRingMode.Classic)
+                {
+                    DifficultyRingMode.Classic,
+                    DifficultyRingMode.Expanded,
+                };
+
             public DropdownSetting<HighScoreInfoMode> HighScoreInfo { get; }
                 = new(HighScoreInfoMode.Stars)
-            {
-                HighScoreInfoMode.Stars,
-                HighScoreInfoMode.Score,
-                HighScoreInfoMode.Off
-            };
+                {
+                    HighScoreInfoMode.Stars,
+                    HighScoreInfoMode.Score,
+                    HighScoreInfoMode.Off
+                };
+
+            public DropdownSetting<HighScoreHistoryMode> HighScoreHistory { get; }
+                = new(HighScoreHistoryMode.HighestDifficulty, _ => ScoreContainer.InvalidateScoreCache())
+                {
+                    HighScoreHistoryMode.HighestOverall,
+                    HighScoreHistoryMode.HighestDifficulty,
+                };
 
             #endregion
 
             #region Sound
 
             public VolumeSetting MasterMusicVolume { get; } = new(0.75f, v => GlobalAudioHandler.SetMasterVolume(v));
-            public VolumeSetting GuitarVolume      { get; } = new(1f, v => GlobalAudioHandler.SetVolumeSetting(SongStem.Guitar, v));
-            public VolumeSetting RhythmVolume      { get; } = new(1f, v => GlobalAudioHandler.SetVolumeSetting(SongStem.Rhythm, v));
-            public VolumeSetting BassVolume        { get; } = new(1f, v => GlobalAudioHandler.SetVolumeSetting(SongStem.Bass, v));
-            public VolumeSetting KeysVolume        { get; } = new(1f, v => GlobalAudioHandler.SetVolumeSetting(SongStem.Keys, v));
-            public VolumeSetting DrumsVolume       { get; } = new(1f, v => GlobalAudioHandler.SetVolumeSetting(SongStem.Drums, v));
-            public VolumeSetting VocalsVolume      { get; } = new(1f, v => GlobalAudioHandler.SetVolumeSetting(SongStem.Vocals, v));
-            public VolumeSetting SongVolume        { get; } = new(1f, v => GlobalAudioHandler.SetVolumeSetting(SongStem.Song, v));
-            public VolumeSetting CrowdVolume       { get; } = new(0.5f, v => GlobalAudioHandler.SetVolumeSetting(SongStem.Crowd, v));
-            public VolumeSetting SfxVolume         { get; } = new(0.8f, v => GlobalAudioHandler.SetVolumeSetting(SongStem.Sfx, v));
-            public VolumeSetting PreviewVolume     { get; } = new(0.25f);
+
+            public VolumeSetting GuitarVolume { get; } =
+                new(1f, v => GlobalAudioHandler.SetVolumeSetting(SongStem.Guitar, v));
+
+            public VolumeSetting RhythmVolume { get; } =
+                new(1f, v => GlobalAudioHandler.SetVolumeSetting(SongStem.Rhythm, v));
+
+            public VolumeSetting BassVolume { get; } =
+                new(1f, v => GlobalAudioHandler.SetVolumeSetting(SongStem.Bass, v));
+
+            public VolumeSetting KeysVolume { get; } =
+                new(1f, v => GlobalAudioHandler.SetVolumeSetting(SongStem.Keys, v));
+
+            public VolumeSetting DrumsVolume { get; } =
+                new(1f, v => GlobalAudioHandler.SetVolumeSetting(SongStem.Drums, v));
+
+            public VolumeSetting VocalsVolume { get; } =
+                new(1f, v => GlobalAudioHandler.SetVolumeSetting(SongStem.Vocals, v));
+
+            public VolumeSetting SongVolume { get; } =
+                new(1f, v => GlobalAudioHandler.SetVolumeSetting(SongStem.Song, v));
+
+            public VolumeSetting CrowdVolume { get; } =
+                new(1f, v => GlobalAudioHandler.SetVolumeSetting(SongStem.Crowd, v));
+
+            public VolumeSetting SfxVolume { get; } =
+                new(0.8f, v => GlobalAudioHandler.SetVolumeSetting(SongStem.Sfx, v));
+
+            public VolumeSetting DrumSfxVolume { get; } =
+                new(0.8f, v => GlobalAudioHandler.SetVolumeSetting(SongStem.DrumSfx, v));
+
+            public VolumeSetting PreviewVolume { get; } = new(0.25f);
             public VolumeSetting MusicPlayerVolume { get; } = new(0.15f, MusicPlayerVolumeCallback);
-            public VolumeSetting VocalMonitoring   { get; } = new(0.7f, VocalMonitoringCallback);
+            public VolumeSetting VocalMonitoring { get; } = new(0.7f, VocalMonitoringCallback);
 
             public ToggleSetting EnablePlaybackBuffer { get; } = new(true, GlobalAudioHandler.TogglePlaybackBuffer);
 
             public IntSetting PlaybackBufferLength { get; }
-                = new(75, GlobalAudioHandler.MinimumBufferLength, GlobalAudioHandler.MaximumBufferLength, GlobalAudioHandler.SetBufferLength);
+                = new(75, GlobalAudioHandler.MinimumBufferLength, GlobalAudioHandler.MaximumBufferLength,
+                    GlobalAudioHandler.SetBufferLength);
 
             public SliderSetting MicrophoneSensitivity { get; } = new(2f, -50f, 50f);
 
@@ -132,80 +208,139 @@ namespace YARG.Settings
                 AudioFxMode.On
             };
 
-            public ToggleSetting ClapsInStarpower { get; } = new(true);
+            public DropdownSetting<CrowdFxMode> UseCrowdFx { get; } = new(CrowdFxMode.Enabled)
+            {
+                CrowdFxMode.Disabled,
+                CrowdFxMode.StarpowerClapsOnly,
+                CrowdFxMode.Enabled
+            };
 
-            // public ToggleSetting UseWhammyFx            { get; } = new(true, UseWhammyFxChange);
-            // public SliderSetting WhammyPitchShiftAmount { get; } = new(1, 1, 12, WhammyPitchShiftAmountChange);
-            // public IntSetting    WhammyOversampleFactor { get; } = new(8, 4, 32, WhammyOversampleFactorChange);
+            public ToggleSetting OverstrumAndOverhitSoundEffects { get; } = new(true);
+
+            public ToggleSetting AlwaysOnDrumSFX { get; } = new(false);
+
+            public ToggleSetting UseWhammyFx { get; } = new(true, v => GlobalAudioHandler.UseWhammyFx = v);
+
+            public SliderSetting WhammyPitchShiftAmount { get; } = new(1, 1, 5, v => GlobalAudioHandler.WhammyPitchShiftAmount = v);
+
             public ToggleSetting UseChipmunkSpeed { get; } = new(false, UseChipmunkSpeedChange);
 
             public ToggleSetting ApplyVolumesInMusicLibrary { get; } = new(true);
+
+            public ToggleSetting EnableVoxSamples { get; } = new(true);
 
             #endregion
 
             #region Graphics
 
-            public ToggleSetting VSync  { get; } = new(true, VSyncCallback);
-            public IntSetting    FpsCap { get; } = new(60, 1, onChange: FpsCapCallback);
+            public ToggleSetting VSync       { get; } = new(true, VSyncCallback);
+            public IntSetting    FpsCap      { get; } = new(60, 0, onChange: FpsCapCallback);
+            public IntSetting    VenueFpsCap { get; } = new(60, 1);
 
             public DropdownSetting<FullScreenMode> FullscreenMode { get; }
                 = new(FullScreenMode.FullScreenWindow, FullscreenModeCallback)
-            {
+                {
 #if UNITY_STANDALONE_WIN
-                FullScreenMode.ExclusiveFullScreen,
+                    FullScreenMode.ExclusiveFullScreen,
 #elif UNITY_STANDALONE_OSX
                 FullScreenMode.MaximizedWindow,
 #endif
-                FullScreenMode.FullScreenWindow,
-                FullScreenMode.Windowed,
-            };
+                    FullScreenMode.FullScreenWindow,
+                    FullScreenMode.Windowed,
+                };
+
+            public DropdownSetting<QualityMode> VenueRenderingQuality { get; }
+                 = new(QualityMode.NativeAA, VenueQualityModeCallback)
+                 {
+                     QualityMode.NativeAA,
+                     QualityMode.UltraQuality,
+                     QualityMode.Quality,
+                     QualityMode.Balanced,
+                     QualityMode.Performance,
+                     QualityMode.UltraPerformance
+                 };
+
+            public DropdownSetting<VenueAntiAliasingMethod> VenueAntiAliasing { get; }
+                 = new(YARG.VenueAntiAliasingMethod.None, VenueAACallback)
+                 {
+                     YARG.VenueAntiAliasingMethod.None,
+                     YARG.VenueAntiAliasingMethod.FXAA,
+                     YARG.VenueAntiAliasingMethod.MSAA,
+                 };
 
             public ResolutionSetting Resolution { get; } = new(ResolutionCallback);
-            public ToggleSetting     FpsStats   { get; } = new(false, FpsCounterCallback);
+            public ToggleSetting FpsStats { get; } = new(false, FpsCounterCallback);
 
-            public ToggleSetting LowQuality   { get; } = new(false, LowQualityCallback);
+            public ToggleSetting LowQuality { get; } = new(false, LowQualityCallback);
             public ToggleSetting DisableBloom { get; } = new(false, DisableBloomCallback);
+            public ToggleSetting DisableFilmGrain { get; } = new(false, DisableFilmGrainCallback);
 
             public DropdownSetting<StarPowerHighwayFxMode> StarPowerHighwayFx { get; }
                 = new(StarPowerHighwayFxMode.On)
-            {
-                StarPowerHighwayFxMode.On,
-                StarPowerHighwayFxMode.Reduced,
-                StarPowerHighwayFxMode.Off
-            };
+                {
+                    StarPowerHighwayFxMode.On,
+                    StarPowerHighwayFxMode.Reduced,
+                    StarPowerHighwayFxMode.Off
+                };
 
-            public ToggleSetting ShowHitWindow            { get; } = new(false, ShowHitWindowCallback);
+            public SliderSetting SongBackgroundOpacity { get; } = new(1f, 0f, 1f);
+            public ToggleSetting StaticVocalsMode { get; } = new(false);
+            public ToggleSetting UseThreeLaneLyricsInHarmony { get; } = new(true);
+            public ToggleSetting EnableTrackEffects { get; } = new(true);
+            public ToggleSetting EnableHighwayAnimation { get; } = new(true);
+            public SliderSetting KickBounceMultiplier { get; } = new(1f, 0f, 2f);
+            public SliderSetting HighwayTiltMultiplier { get; } = new(0.5f, 0f, 1f);
+
+            public ToggleSetting ShowHitWindow { get; } = new(false, ShowHitWindowCallback);
             public ToggleSetting DisableTextNotifications { get; } = new(false);
 
             public DropdownSetting<NoteStreakFrequencyMode> NoteStreakFrequency { get; }
                 = new(NoteStreakFrequencyMode.Frequent)
-            {
-                NoteStreakFrequencyMode.Frequent,
-                NoteStreakFrequencyMode.Sparse,
-                NoteStreakFrequencyMode.Disabled
-            };
+                {
+                    NoteStreakFrequencyMode.Frequent,
+                    NoteStreakFrequencyMode.Sparse,
+                    NoteStreakFrequencyMode.Disabled
+                };
 
-            public DropdownSetting<SongProgressMode> SongTimeOnScoreBox { get; }
-                = new(SongProgressMode.CountUpOnly)
-            {
-                SongProgressMode.None,
-                SongProgressMode.CountUpAndTotal,
-                SongProgressMode.CountDownAndTotal,
-                SongProgressMode.CountUpOnly,
-                SongProgressMode.CountDownOnly,
-                SongProgressMode.TotalOnly
-            };
+            public DropdownSetting<VocalStreakFrequencyMode> VocalStreakFrequency { get; }
+                = new(VocalStreakFrequencyMode.Frequent)
+                {
+                    VocalStreakFrequencyMode.Frequent,
+                    VocalStreakFrequencyMode.Sparse,
+                    VocalStreakFrequencyMode.Disabled
+                };
 
-            public ToggleSetting GraphicalProgressOnScoreBox { get; } = new(true);
+            public DropdownSetting<CountdownDisplayMode> CountdownDisplay { get; }
+                = new(CountdownDisplayMode.Measures)
+                {
+                    CountdownDisplayMode.Measures,
+                    CountdownDisplayMode.Seconds,
+                    CountdownDisplayMode.Disabled
+                };
+
+            public ToggleSetting ShowPlayerNameWhenStartingSong { get; } = new(true);
 
             public DropdownSetting<LyricDisplayMode> LyricDisplay { get; }
                 = new(LyricDisplayMode.Normal)
-            {
-                LyricDisplayMode.Normal,
-                LyricDisplayMode.Transparent,
-                LyricDisplayMode.NoBackground,
-                LyricDisplayMode.Disabled
-            };
+                {
+                    LyricDisplayMode.Normal,
+                    LyricDisplayMode.Transparent,
+                    LyricDisplayMode.NoBackground,
+                    LyricDisplayMode.Disabled
+                };
+
+            public DropdownSetting<SongProgressMode> SongTimeOnScoreBox { get; }
+                = new(SongProgressMode.CountUpAndTotal)
+                {
+                    SongProgressMode.None,
+                    SongProgressMode.CountUpAndTotal,
+                    SongProgressMode.CountDownAndTotal,
+                    SongProgressMode.CountUpOnly,
+                    SongProgressMode.CountDownOnly,
+                    SongProgressMode.TotalOnly
+                };
+
+            public ToggleSetting GraphicalProgressOnScoreBox { get; } = new(true);
 
             public ToggleSetting KeepSongInfoVisible { get; } = new(false);
 
@@ -246,26 +381,65 @@ namespace YARG.Settings
             #endregion
 
             #region Lighting Peripherals
-
-            public ToggleSetting StageKitEnabled { get; } = new(true, StageKitEnabledCallback);
-            public ToggleSetting DMXEnabled      { get; } = new(false, DMXEnabledCallback);
+            public ToggleSetting StageKitEnabled  { get; } = new(true, StageKitEnabledCallback);
+            public ToggleSetting DMXEnabled       { get; } = new(false, DMXEnabledCallback);
+            public ToggleSetting RB3EEnabled      { get; } = new(false, RB3EEnabledCallback);
 
             public DMXChannelsSetting DMXDimmerChannels { get; } = new(
-                new[] { 01, 09, 17, 25, 33, 41, 49, 57 }, DMXCallback);
-            public DMXChannelsSetting DMXBlueChannels { get; } = new(
-                new[] { 04, 12, 20, 28, 36, 44, 52, 60 }, DMXCallback);
+                new[] { 01, 09, 17, 25, 33, 41, 49, 57 }, v => SacnInterpreter.Instance.DimmerChannels = v);
+
             public DMXChannelsSetting DMXRedChannels { get; } = new(
-                new[] { 02, 10, 18, 26, 34, 42, 50, 58 }, DMXCallback);
+                new[] { 02, 10, 18, 26, 34, 42, 50, 58 }, v => SacnInterpreter.Instance.RedChannels = v);
+
             public DMXChannelsSetting DMXGreenChannels { get; } = new(
-                new[] { 03, 11, 19, 27, 35, 43, 51, 59 }, DMXCallback);
+                new[] { 03, 11, 19, 27, 35, 43, 51, 59 }, v => SacnInterpreter.Instance.GreenChannels = v);
+
+            public DMXChannelsSetting DMXBlueChannels { get; } = new(
+                new[] { 04, 12, 20, 28, 36, 44, 52, 60 }, v => SacnInterpreter.Instance.BlueChannels = v);
+
             public DMXChannelsSetting DMXYellowChannels { get; } = new(
-                new[] { 05, 13, 21, 29, 37, 45, 53, 61 }, DMXCallback);
+                new[] { 05, 13, 21, 29, 37, 45, 53, 61 }, v => SacnInterpreter.Instance.YellowChannels = v);
 
-            public IntSetting DMXFogChannel { get; } = new(6, 1, 512);
+            public DMXChannelsSetting DMXFogChannels { get; } = new(
+                new[] { 06, 14, 22, 30, 38, 46, 54, 62 }, v => SacnInterpreter.Instance.FogChannels = v);
 
-            public IntSetting DMXStrobeChannel { get; } = new(7, 1, 512);
+            public DMXChannelsSetting DMXStrobeChannels { get; } = new(
+                new[] { 07, 15, 23, 31, 39, 47, 55, 63 }, v => SacnInterpreter.Instance.StrobeChannels = v);
 
-            public IntSetting DMXCueChangeChannel { get; } = new(8, 1, 512);
+            public IntSetting DMXCueChangeChannel { get; } =
+                new(8, 1, 512, v => SacnInterpreter.Instance.CueChangeChannel = v);
+
+            public IPv4Setting RB3EBroadcastIP { get; } =
+                new("255.255.255.255", ip => RB3EHardware.Instance.IPAddress = IPAddress.Parse(ip));
+
+            public IntSetting DMXBeatlineChannel { get; } =
+                new(14, 1, 512, v => SacnInterpreter.Instance.BeatlineChannel = v);
+
+            public IntSetting DMXBonusEffectChannel { get; } =
+                new(15, 1, 512, v => SacnInterpreter.Instance.BonusEffectChannel = v);
+
+            public IntSetting DMXKeyframeChannel { get; } =
+                new(16, 1, 512, v => SacnInterpreter.Instance.KeyframeChannel = v);
+
+            public IntSetting DMXDrumsChannel { get; } =
+                new(22, 1, 512, v => SacnInterpreter.Instance.DrumChannel = v);
+
+            public IntSetting DMXPostProcessingChannel { get; } =
+                new(23, 1, 512, v => SacnInterpreter.Instance.PostProcessingChannel = v);
+
+            public IntSetting DMXGuitarChannel { get; } =
+                new(24, 1, 512, v => SacnInterpreter.Instance.GuitarChannel = v);
+
+            public IntSetting DMXBassChannel { get; } = new(30, 1, 512, v => SacnInterpreter.Instance.BassChannel = v);
+
+            //NYI
+            //public IntSetting DMXPerformerChannel { get; } = new(31, 1, 512);
+
+            public IntSetting DMXKeysChannel { get; } = new(32, 1, 512, v => SacnInterpreter.Instance.KeysChannel = v);
+
+            public IntSetting DMXUniverseChannel { get; } = new(1, 1, 65535);
+
+            public DMXChannelsSetting DMXDimmerValues { get; } = new(new[] { 255, 255, 255, 255, 255, 255, 255, 255 });
 
             #endregion
 
@@ -275,9 +449,67 @@ namespace YARG.Settings
 
             public ToggleSetting ShowAdvancedMusicLibraryOptions { get; } = new(false);
 
+            public DropdownSetting<LogLevel> MinimumLogLevel { get; } = new(
+#if UNITY_EDITOR
+                LogLevel.Debug,
+#else
+                LogLevel.Info,
+#endif
+                SetLogLevelCallback
+            )
+            {
+                LogLevel.Trace,
+                LogLevel.Debug,
+                LogLevel.Info,
+                LogLevel.Warning,
+                LogLevel.Error,
+                // No real need to distinguish these two,
+                // they're very important to have in logs regardless
+                // LogLevel.Exception,
+                // LogLevel.Failure,
+            };
+
+            #endregion
+
+            #region Experimental
+
+            public ToggleSetting DataStreamEnable { get; } = new(false, DataStreamEnableCallback );
+            public DropdownSetting<BandComboType> BandComboTypeSetting { get; } = new(BandComboType.Off)
+            {
+                BandComboType.Off,
+                BandComboType.Lenient,
+                BandComboType.Strict
+            };
+
             #endregion
 
             #region Callbacks
+
+            private static void SetLogLevelCallback(LogLevel level)
+            {
+                YargLogger.MinimumLogLevel = level;
+            }
+
+            private static void DiscordRichPresenceCallback(DiscordRichPresenceMode mode)
+            {
+                // Dispose Discord instance if rich presence is turned off, otherwise try initializing it again
+                if (mode == DiscordRichPresenceMode.Hide)
+                {
+                    DiscordController.Instance.TryDispose();
+                }
+                else
+                {
+                    DiscordController.Instance.CreateInstance();
+                }
+            }
+
+            private static void ShowBatteryCallback(bool value)
+            {
+                // Only show if battery status is reported and has a valid value
+                value &= SystemInfo.batteryStatus != BatteryStatus.Unknown &&
+                    SystemInfo.batteryLevel is >= 0 and <= 1;
+                StatsManager.Instance.SetShowing(StatsManager.Stat.Battery, value);
+            }
 
             private static void ShowTimeCallback(bool value)
             {
@@ -294,33 +526,43 @@ namespace YARG.Settings
                 StatsManager.Instance.SetShowing(StatsManager.Stat.Memory, value);
             }
 
-            private static void StageKitEnabledCallback(bool value)
+            private static void ShowActivePlayersCallback(bool value)
             {
+                StatsManager.Instance.SetShowing(StatsManager.Stat.ActivePlayers, value);
+            }
+
+            private static void ShowActiveBotsCallback(bool value)
+            {
+                StatsManager.Instance.SetShowing(StatsManager.Stat.ActiveBots, value);
+            }
+
+            private static void DataStreamEnableCallback(bool value)
+            {
+                //To avoid being toggled on twice at start
                 if (!IsInitialized)
                 {
                     return;
                 }
+                DataStreamController.Instance.HandleEnabledChanged(value);
+            }
+            private static void RB3EEnabledCallback(bool value)
+            {
+                RB3EHardware.Instance.HandleEnabledChanged(value);
+            }
 
+            private static void StageKitEnabledCallback(bool value)
+            {
+                //To avoid being toggled on twice at start
+                if (!IsInitialized)
+                {
+                    return;
+                }
                 StageKitHardware.Instance.HandleEnabledChanged(value);
             }
 
             private static void DMXEnabledCallback(bool value)
             {
-                if (!IsInitialized)
-                {
-                    return;
-                }
-
                 SacnHardware.Instance.HandleEnabledChanged(value);
-            }
-
-            private static void DMXCallback(int[] value)
-            {
-                if (!IsInitialized)
-                {
-                    return;
-                }
-                SacnHardware.Instance.UpdateDMXChannelNumbers();
             }
 
             private static void VSyncCallback(bool value)
@@ -336,6 +578,11 @@ namespace YARG.Settings
 #endif
 
                 StatsManager.Instance.SetShowing(StatsManager.Stat.FPS, value);
+            }
+
+            private static void VenueAACallback(VenueAntiAliasingMethod value)
+            {
+                GraphicsManager.Instance.VenueAntiAliasing = value;
             }
 
             private static void FpsCapCallback(int value)
@@ -354,6 +601,17 @@ namespace YARG.Settings
                 Screen.fullScreenMode = value;
             }
 
+            private static void VenueQualityModeCallback(QualityMode value)
+            {
+                // Unity saves this information automatically
+                if (!IsInitialized)
+                {
+                    return;
+                }
+
+                GraphicsManager.Instance.VenueRenderScale = 1.0f / GetUpscaleRatioFromQualityMode(value);
+            }
+
             private static void ResolutionCallback(Resolution? value)
             {
                 // Unity saves this information automatically
@@ -362,42 +620,8 @@ namespace YARG.Settings
                     return;
                 }
 
-                Resolution resolution;
-
-                // If set to null, just get the "default" resolution.
-                if (value == null)
-                {
-                    // Since we actually can't get the highest resolution,
-                    // we need to find it in the supported resolutions
-                    var highest = new Resolution
-                    {
-                        width = 0, height = 0, refreshRate = 0
-                    };
-
-                    foreach (var r in Screen.resolutions)
-                    {
-                        if (r.refreshRate >= highest.refreshRate ||
-                            r.width >= highest.width ||
-                            r.height >= highest.height)
-                        {
-                            highest = r;
-                        }
-                    }
-
-                    resolution = highest;
-                }
-                else
-                {
-                    resolution = value.Value;
-                }
-
-                var fullscreenMode = FullScreenMode.FullScreenWindow;
-                if (Settings != null)
-                {
-                    fullscreenMode = Settings.FullscreenMode.Value;
-                }
-
-                Screen.SetResolution(resolution.width, resolution.height, fullscreenMode, resolution.refreshRate);
+                var resolution = value ?? ScreenHelper.GetScreenResolution();
+                ScreenHelper.SetResolution(resolution);
 
                 // Make sure to refresh the preview since it'll look stretched if we don't
                 SettingsMenu.Instance.RefreshPreview(true);
@@ -411,6 +635,11 @@ namespace YARG.Settings
             private static void DisableBloomCallback(bool value)
             {
                 GraphicsManager.Instance.BloomEnabled = !value;
+            }
+
+            private static void DisableFilmGrainCallback(bool value)
+            {
+                GraphicsManager.Instance.FilmGrainEnabled = !value;
             }
 
             private static void ShowHitWindowCallback(bool value)
@@ -431,16 +660,6 @@ namespace YARG.Settings
                 HelpBar.Instance.MusicPlayer.UpdateVolume(volume);
             }
 
-            // private static void UseWhammyFxChange(bool value)
-            // {
-            //     AudioManager.UseWhammyFx = value;
-            // }
-
-            // private static void WhammyPitchShiftAmountChange(float value)
-            // {
-            //     AudioManager.WhammyPitchShiftAmount = value;
-            // }
-            //
             // private static void WhammyOversampleFactorChange(int value)
             // {
             //     AudioManager.WhammyOversampleFactor = value;
@@ -457,10 +676,10 @@ namespace YARG.Settings
 
                 foreach (var device in InputSystem.devices)
                 {
-                    YargLogger.LogFormatInfo("Description for device {0}:\n{1}\n", device.displayName, item2: device.description.ToJson());
+                    YargLogger.LogFormatInfo("Description for device {0}:\n{1}\n", device.displayName,
+                        item2: device.description.ToJson());
                 }
             }
-
             #endregion
         }
     }

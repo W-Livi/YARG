@@ -1,7 +1,9 @@
-﻿using Cysharp.Text;
+﻿using System.Diagnostics;
+using Cysharp.Text;
 using TMPro;
 using UnityEngine;
 using YARG.Core.Game;
+using YARG.Core.Logging;
 
 namespace YARG.Gameplay.Visuals
 {
@@ -25,8 +27,20 @@ namespace YARG.Gameplay.Visuals
         [SerializeField]
         private Material _noFcRingMaterial;
 
-        public void Initialize(EnginePreset preset)
+        private TextMeshPro[] _textCache;
+
+        public void Initialize(EnginePreset preset, int maxMultiplier)
         {
+            _multiplierText.enabled = false;
+            _multiplierText.text = string.Empty;
+            _textCache = new TextMeshPro[maxMultiplier * 2 - 1];
+            _textCache[0] = _multiplierText;
+            for(int i = 0; i < _textCache.Length; ++i)
+            {
+                _textCache[i] = Instantiate(_multiplierText, _multiplierText.transform.parent, true);
+                _textCache[i].SetTextFormat("{0}<sub>x</sub>", i + 2);
+            }
+
             // Skip if the preset is a default one
             if (EnginePreset.Defaults.Contains(preset)) return;
 
@@ -34,12 +48,14 @@ namespace YARG.Gameplay.Visuals
             _comboMesh.material.SetColor(_multiplierColorProperty, color);
         }
 
-        public void SetCombo(int multiplier, int maxMultiplier, int combo)
+        public void SetCombo(int multiplier, int displayMultiplier, int maxMultiplier, int combo)
         {
-            if (multiplier != 1)
-                _multiplierText.SetTextFormat("{0}<sub>x</sub>", multiplier);
-            else
-                _multiplierText.text = string.Empty;
+            _multiplierText.enabled = false;
+            if (displayMultiplier > 1)
+            {
+                _multiplierText = _textCache[displayMultiplier - 2];
+                _multiplierText.enabled = true;
+            }
 
             int index = combo % 10;
             if (combo != 0 && index == 0)
@@ -56,7 +72,7 @@ namespace YARG.Gameplay.Visuals
 
         public void SetFullCombo(bool isFc)
         {
-            _ringMesh.material = isFc ? _fcRingMaterial : _noFcRingMaterial;
+            _ringMesh.sharedMaterial = isFc ? _fcRingMaterial : _noFcRingMaterial;
         }
     }
 }

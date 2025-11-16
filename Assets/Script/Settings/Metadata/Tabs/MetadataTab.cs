@@ -1,9 +1,9 @@
 ﻿using System.Collections;
 using System.Collections.Generic;
+using TMPro;
 using UnityEngine;
 using UnityEngine.AddressableAssets;
-using UnityEngine.Localization.Components;
-using YARG.Helpers;
+using YARG.Localization;
 using YARG.Menu.Navigation;
 using YARG.Menu.Settings;
 using YARG.Menu.Settings.Visuals;
@@ -36,6 +36,7 @@ namespace YARG.Settings.Metadata
         public override void BuildSettingTab(Transform container, NavigationGroup navGroup)
         {
             _settingVisuals.Clear();
+            var settingIndex = 0;
 
             // Once we've found the tab, add the settings
             foreach (var settingMetadata in _settings)
@@ -48,9 +49,10 @@ namespace YARG.Settings.Metadata
                         var go = Object.Instantiate(_headerPrefab, container);
 
                         // Set header text
-                        go.GetComponentInChildren<LocalizeStringEvent>().StringReference =
-                            LocaleHelper.StringReference("Settings", $"Header.{header.HeaderName}");
+                        go.GetComponentInChildren<TextMeshProUGUI>().text =
+                            Localize.Key("Settings.Header", header.HeaderName);
 
+                        settingIndex = 0;
                         break;
                     }
                     case ButtonRowMetadata buttonRow:
@@ -69,9 +71,9 @@ namespace YARG.Settings.Metadata
                         // Spawn in the header
                         var go = Object.Instantiate(_textPrefab, container);
 
-                        // Set header text
-                        go.GetComponentInChildren<LocalizeStringEvent>().StringReference =
-                            LocaleHelper.StringReference("Settings", $"Text.{text.TextName}");
+                        // Set text
+                        go.GetComponentInChildren<TextMeshProUGUI>().text =
+                            Localize.Key("Settings.Text", text.TextName);
 
                         break;
                     }
@@ -80,11 +82,13 @@ namespace YARG.Settings.Metadata
                         var setting = SettingsManager.GetSettingByName(field.FieldName);
 
                         var visual = SpawnSettingVisual(setting, container);
-                        visual.AssignSetting(field.FieldName);
+                        visual.AssignSetting(field.FieldName, field.HasDescription);
+                        visual.AssignIndex(settingIndex);
 
                         _settingVisuals.Add(field.FieldName, visual);
                         navGroup.AddNavigatable(visual.gameObject);
 
+                        settingIndex++;
                         break;
                     }
                 }

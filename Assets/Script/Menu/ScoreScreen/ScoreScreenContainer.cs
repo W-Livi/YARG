@@ -1,10 +1,14 @@
 ﻿using YARG.Core.Engine;
+using YARG.Core.Replays;
 using YARG.Player;
+using YARG.Replays;
 
 namespace YARG.Menu.ScoreScreen
 {
     public struct PlayerScoreCard
     {
+        public bool IsHighScore;
+
         public YargPlayer Player;
         public BaseStats  Stats;
     }
@@ -15,5 +19,9 @@ namespace YARG.Menu.ScoreScreen
 
         public int BandStars;
         public int BandScore;
+
+#nullable enable
+        public ReplayInfo? ReplayInfo;
+#nullable disable
     }
 }
